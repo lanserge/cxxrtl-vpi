@@ -55,11 +55,18 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiTimePrecision 12
 
 /* ---- Object types (returned by vpi_get(vpiType, ...)) ---- */
+#define vpiMemory       29
+#define vpiMemoryWord   30
 #define vpiModule       32
 #define vpiNet          36
 #define vpiParameter    41
 #define vpiPort         44
 #define vpiReg          48
+
+/* ---- Relationships (vpi_handle) ---- */
+#define vpiIndex        78
+#define vpiParent       81
+#define vpiScope        84
 
 /* ---- Scalar bit values ---- */
 #define vpi0            0

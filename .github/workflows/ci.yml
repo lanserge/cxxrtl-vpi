@@ -34,3 +34,5 @@ jobs:
           grep -q "PASS=1 FAIL=0" c.log
           PYTHON=python bash examples/cocotb_hier/run_cocotb.sh | tee h.log
           grep -q "PASS=1 FAIL=0" h.log
+          PYTHON=python bash examples/cocotb_mem/run_cocotb.sh | tee m.log
+          grep -q "PASS=1 FAIL=0" m.log

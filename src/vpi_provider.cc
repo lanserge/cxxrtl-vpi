@@ -55,6 +55,12 @@ struct VpiObject {
     std::string name;                     // H_MODULE: scope name
     std::vector<vpiHandle> items;         // H_ITER: handles to hand out
     size_t pos = 0;                       // H_ITER: scan cursor
+
+    // H_SIGNAL may instead be a memory-element view: `elem` points into the
+    // memory's `curr` storage (memories have no `next`), with the given width.
+    uint32_t *elem = nullptr;
+    size_t elem_width = 0;
+    int elem_index = 0;
 };
 
 // A registered callback. Also an opaque vpiHandle (returned by vpi_register_cb).
@@ -108,6 +114,13 @@ std::string spaces_to_dots(std::string s) {
 std::string leaf_name(const std::string &name) {
     size_t p = name.rfind(' ');
     return p == std::string::npos ? name : name.substr(p + 1);
+}
+
+// Parent scope of a CXXRTL path = everything before the last separator ("" for
+// a top-level object).
+std::string parent_scope(const std::string &name) {
+    size_t p = name.rfind(' ');
+    return p == std::string::npos ? "" : name.substr(0, p);
 }
 
 // Is `name` a direct child object of `scope` (both CXXRTL-style)? scope=="" is
@@ -386,17 +399,47 @@ vpiHandle vpi_scan(vpiHandle iterator) {
 }
 
 vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
-    (void)type;
-    (void)refHandle;
-    // TODO: parent/scope navigation if a client needs it.
+    VpiObject *o = as_obj(refHandle);
+    if (!o)
+        return nullptr;
+
+    if (type == vpiParent || type == vpiScope) {
+        std::string path;
+        if (o->kind == H_SIGNAL) {
+            path = o->sig ? o->sig->name : std::string();
+        } else if (o->kind == H_MODULE) {
+            if (o->name.empty())
+                return nullptr;  // the toplevel has no parent
+            path = o->name;
+        } else {
+            return nullptr;
+        }
+        return obj_handle(make_module(parent_scope(path)));
+    }
     return nullptr;
 }
 
+// Index into a CXXRTL memory: vpi_handle_by_index(mem, addr) -> a word view.
 vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 index) {
-    (void)object;
-    (void)index;
-    // TODO: bit/element select. Null is a valid "not found" response.
-    return nullptr;
+    VpiObject *o = as_obj(object);
+    if (!o || o->kind != H_SIGNAL || !o->sig)
+        return nullptr;
+    cxxrtl_object *m = o->sig->object;
+    if (m->depth <= 1)
+        return nullptr;  // not a memory
+
+    long word = static_cast<long>(index) - static_cast<long>(m->zero_at);
+    if (word < 0 || static_cast<size_t>(word) >= m->depth)
+        return nullptr;
+
+    const size_t chunks = (m->width + 31) / 32;
+    auto *e = new VpiObject;
+    e->kind = H_SIGNAL;
+    e->sig = o->sig;  // retained for naming/context
+    e->elem = m->curr + static_cast<size_t>(word) * chunks;
+    e->elem_width = m->width;
+    e->elem_index = index;
+    return obj_handle(e);
 }
 
 PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p) {
@@ -434,11 +477,37 @@ PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
         return property == vpiType ? vpiModule : 0;
     if (o->kind != H_SIGNAL)
         return 0;
+
+    if (o->elem) {  // memory word view
+        switch (property) {
+            case vpiSize:
+                return static_cast<PLI_INT32>(o->elem_width);
+            case vpiType:
+                return vpiReg;
+            case vpiIndex:
+                return o->elem_index;
+            default:
+                return 0;
+        }
+    }
+
+    cxxrtl_object *obj = o->sig->object;
+    if (obj->depth > 1) {  // memory/array
+        switch (property) {
+            case vpiSize:
+                return static_cast<PLI_INT32>(obj->depth);
+            case vpiType:
+                return vpiMemory;
+            default:
+                return 0;
+        }
+    }
+
     switch (property) {
         case vpiSize:
             return static_cast<PLI_INT32>(o->sig->width);
         case vpiType:
-            return o->sig->object->next ? vpiReg : vpiNet;
+            return obj->next ? vpiReg : vpiNet;
         default:
             return 0;
     }
@@ -488,7 +557,16 @@ void vpi_get_value(vpiHandle expr, p_vpi_value value_p) {
         return;
 
     std::vector<uint32_t> bits;
-    const size_t width = g_model->read(*o->sig, bits);
+    size_t width;
+    if (o->elem) {  // memory word: read directly from the element storage
+        width = o->elem_width;
+        const size_t chunks = (width + 31) / 32;
+        bits.assign(o->elem, o->elem + chunks);
+        if (chunks && (width % 32) != 0)
+            bits[chunks - 1] &= (uint32_t(1) << (width % 32)) - 1;
+    } else {
+        width = g_model->read(*o->sig, bits);
+    }
     const size_t chunks = bits.size();
 
     switch (value_p->format) {
@@ -531,7 +609,7 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
     if (!o || o->kind != H_SIGNAL || !value_p)
         return nullptr;
 
-    const size_t width = o->sig->width;
+    const size_t width = o->elem ? o->elem_width : o->sig->width;
     const size_t chunks = (width + 31) / 32;
     std::vector<uint32_t> val(chunks, 0);
 
@@ -560,9 +638,16 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
             return nullptr;
     }
 
-    DBG("put_value: %s = %u (fmt=%d) @t=%llu", o->sig->name.c_str(),
-        val.empty() ? 0 : val[0], value_p->format, (unsigned long long)g_time);
-    g_model->write(*o->sig, val);  // staged into `next`; latched by settle()
+    DBG("put_value: %s%s = %u (fmt=%d) @t=%llu", o->sig->name.c_str(),
+        o->elem ? "[elem]" : "", val.empty() ? 0 : val[0], value_p->format,
+        (unsigned long long)g_time);
+    if (o->elem) {
+        // Memories are modified through `curr` directly (no `next` buffer).
+        for (size_t i = 0; i < chunks; i++)
+            o->elem[i] = val[i];
+    } else {
+        g_model->write(*o->sig, val);  // staged into `next`; latched by settle()
+    }
     return object;
 }
 

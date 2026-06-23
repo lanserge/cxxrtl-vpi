@@ -37,7 +37,8 @@ header values/layout.
 | `vpi_iterate(vpiNet, module)` / `vpi_scan` | a scope's direct signals | ☑ |
 | `vpi_iterate(vpiModule, module)` | a scope's direct sub-modules | ☑ |
 | `vpi_handle_by_name` (signals + module scopes) | `cxxrtl_get`, `.`↔` ` translation, `<top>.` strip | ☑ |
-| `vpi_handle(type, ref)` | parent/scope nav | ☐ (stub) |
+| `vpi_handle(vpiParent/vpiScope, ref)` | drop the leaf of the CXXRTL path | ☑ |
+| `vpi_handle_by_index(mem, addr)` | memory word view into `curr` | ☑ |
 | `vpi_free_object` | free our wrapper handle | ☑ |
 
 Hierarchy notes: CXXRTL names objects with a space separator (`u_inner dout`);
@@ -50,6 +51,14 @@ to avoid net/reg double-listing.
 Get/put support `vpiIntVal`, `vpiVectorVal`, and `vpiBinStrVal`; wide
 (>32-bit, multi-chunk) signals work, with padding bits masked. cocotb writes
 wide values as `vpiBinStrVal`, so that format is required, not optional.
+
+## Memories / arrays
+
+A CXXRTL memory (`cxxrtl_object.depth > 1`) is reported as `vpiMemory` with
+`vpiSize` = depth. `vpi_handle_by_index(mem, addr)` returns a word view (offset
+into the memory's `curr` storage by `(addr - zero_at) * chunks`). Words read and
+write through `curr` because memories expose no `next` buffer. cocotb's
+`dut.store[i]` read and write both work.
 
 ## cocotb bring-up: WORKING ✅
 

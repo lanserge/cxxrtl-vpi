@@ -74,6 +74,19 @@ int main() {
         printf("FAIL: vpiFullName wrong\n");
         return 1;
     }
+
+    // 4. Parent navigation: a signal's parent is its module; the top has none.
+    vpiHandle parent = vpi_handle(vpiParent, a);
+    if (!parent || std::strcmp(vpi_get_str(vpiName, parent), "counter") != 0) {
+        printf("FAIL: vpi_handle(vpiParent, count) wrong\n");
+        return 1;
+    }
+    if (vpi_handle(vpiParent, root) != nullptr) {
+        printf("FAIL: toplevel should have no parent\n");
+        return 1;
+    }
+    printf("parent(count) = %s\n", vpi_get_str(vpiName, parent));
+    vpi_free_object(parent);
     vpi_free_object(a);
     vpi_free_object(b);
     vpi_free_object(root);
