@@ -38,6 +38,19 @@ bool g_finished = false;
 constexpr uint64_t NO_DEADLINE = std::numeric_limits<uint64_t>::max();
 
 bool g_debug = false;
+
+// CXXRTL is 2-state; X/Z written by a testbench collapse to 0. Warn once so the
+// silent coercion is visible (further occurrences are suppressed).
+void warn_xz_once(const char *signal) {
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        std::fprintf(stderr,
+                     "cxxrtl-vpi: warning: X/Z value written to '%s' coerced to 0 "
+                     "(CXXRTL is 2-state). Further such warnings suppressed.\n",
+                     signal);
+    }
+}
 #define DBG(...)                              \
     do {                                      \
         if (g_debug) {                        \
@@ -643,16 +656,22 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
                 val[0] = static_cast<uint32_t>(value_p->value.integer);
             break;
         case vpiVectorVal:
-            for (size_t i = 0; i < chunks; i++)
+            for (size_t i = 0; i < chunks; i++) {
                 val[i] = value_p->value.vector[i].aval;
+                if (value_p->value.vector[i].bval)  // X/Z bits set
+                    warn_xz_once(o->sig->name.c_str());
+            }
             break;
         case vpiBinStrVal: {
             const char *s = value_p->value.str;
             size_t len = s ? std::strlen(s) : 0;
             for (size_t i = 0; i < len && i < width; i++) {
                 // string is MSB-first; bit (len-1-i) maps to value bit i
-                if (s[len - 1 - i] == '1')
+                char c = s[len - 1 - i];
+                if (c == '1')
                     val[i / 32] |= uint32_t(1) << (i % 32);
+                else if (c == 'x' || c == 'X' || c == 'z' || c == 'Z')
+                    warn_xz_once(o->sig->name.c_str());
             }
             break;
         }

@@ -105,7 +105,17 @@ for slicing and array bounds.
 - **4-state (X/Z): not supported — inherent to CXXRTL.** Like Verilator (and
   unlike Icarus, which is a 4-state interpreter), CXXRTL is a 2-state engine.
   `s_vpi_vecval.bval` is always 0; X/Z written by a testbench collapse to 0.
-  This cannot be fixed in the VPI layer — the engine never computes X/Z.
+  This cannot be fixed in the VPI layer — the engine never computes X/Z. Two
+  mitigations exist:
+  - **Visible coercion**: writing X/Z to a signal emits a one-time warning
+    (`cxxrtl-vpi: warning: X/Z value written ... coerced to 0`) so the silent
+    downgrade isn't a surprise.
+  - **Init fuzzing**: CXXRTL inits state to 0, so a design that secretly relies
+    on uninitialized state passes silently (the gap Verilator's `--x-initial
+    unique` exists to catch). `build_cocotb_sim(..., randomize_init=True,
+    init_seed=N)` (or `write_cxxrtl(..., randomize_init=True)`) seeds flop init
+    with `setundef -init -random N`; varying the seed across runs exposes such
+    dependence.
 - **force/release**: `vpi_put_value` flags are ignored; a write behaves like a
   deposit (in trust-inertial mode it applies immediately). True force/release
   (override + later restore) is not tracked.

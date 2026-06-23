@@ -41,21 +41,31 @@ def cxxrtl_runtime_include():
         "yosys-config on PATH.")
 
 
-def write_cxxrtl(sources, top, output, yosys="yosys"):
+def write_cxxrtl(sources, top, output, yosys="yosys",
+                 randomize_init=False, init_seed=1):
     """Generate a CXXRTL model from Verilog sources via Yosys.
 
     Args:
         sources: list of HDL source paths.
         top: top module name.
         output: path to write the generated .cc.
+        randomize_init: if True, randomize uninitialized flip-flop state via
+            ``setundef -init -random`` (the CXXRTL analogue of Verilator's
+            --x-initial unique). CXXRTL otherwise inits 2-state engines to 0, so
+            a design that secretly relies on uninitialized state passes silently;
+            randomizing per-seed exposes it. Vary `init_seed` across runs.
+        init_seed: integer seed for the randomization.
     Returns the output path.
     """
     if isinstance(sources, str):
         sources = [sources]
-    script = "; ".join([
+    cmds = [
         "read_verilog " + " ".join(sources),
         f"hierarchy -top {top}",
-        f"write_cxxrtl {output}",
-    ])
-    subprocess.run([yosys, "-q", "-p", script], check=True)
+    ]
+    if randomize_init:
+        # proc lowers always-blocks to flops so setundef can seed their init.
+        cmds += ["proc", f"setundef -init -random {int(init_seed)}"]
+    cmds.append(f"write_cxxrtl {output}")
+    subprocess.run([yosys, "-q", "-p", "; ".join(cmds)], check=True)
     return output
