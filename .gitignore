@@ -1,0 +1,18 @@
+build/
+*.o
+*.so
+*.dylib
+*.a
+*.cc.d
+# generated cxxrtl models
+**/obj/
+*_cxxrtl.cc
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+# cocotb
+sim_build/
+results.xml
+*.vcd

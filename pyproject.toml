@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: ISC
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxxrtl-vpi"
+version = "0.0.0"
+description = "An IEEE-1364 VPI interface for CXXRTL (Yosys C++ simulation backend)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "ISC"
+authors = [{ name = "cxxrtl-vpi contributors" }]
+keywords = ["cxxrtl", "yosys", "vpi", "cocotb", "simulation", "rtl"]
+
+[project.optional-dependencies]
+cocotb = ["cocotb>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/serge/cxxrtl-vpi"
+
+[tool.setuptools]
+packages = ["cxxrtl_vpi"]

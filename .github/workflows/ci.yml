@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: ISC
+name: ci
+on: [push, pull_request]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Yosys + build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys cmake build-essential
+          yosys --version
+
+      - name: Smoke test (toolchain + provider build + write_cxxrtl)
+        run: bash tests/test_smoke.sh
+
+      # TODO: once the VPI provider implements the MVP surface, add a job that
+      # installs cocotb and runs examples/cocotb_counter `make run`, asserting
+      # results.xml reports a passing test.
