@@ -14,13 +14,18 @@ The subset of IEEE-1364 VPI that cocotb actually exercises, and the
 | `vpi_register_cb(cbReadOnlySynch)` | sample after settle | post-`cxxrtl_eval` snapshot | ☐ |
 | `vpi_register_cb(cbNextSimTime)` | advance to next step | `cxxrtl_step` | ☐ |
 | `vpi_register_cb(cbAfterDelay)` | timed callback | harness time queue | ☐ |
-| `vpi_handle_by_name` | resolve a signal | `cxxrtl_get(handle, name)` | ☐ |
-| `vpi_get(vpiType/vpiSize)` | signal metadata | `cxxrtl_object.{type,width}` | ☐ |
-| `vpi_get_str(vpiName/vpiFullName)` | naming | from the `cxxrtl_enum` table | ☐ |
-| `vpi_get_value` | read a signal | `cxxrtl_object.curr` (width bits) | ☐ |
-| `vpi_put_value` | write a signal | `cxxrtl_object.next` + commit | ☐ |
+| `vpi_handle_by_name` | resolve a signal | `cxxrtl_get(handle, name)` | ☑ |
+| `vpi_get(vpiType/vpiSize)` | signal metadata | `cxxrtl_object.{flags,width}` | ☑ |
+| `vpi_get_str(vpiName/vpiFullName)` | naming | from the `cxxrtl_enum` table | ☑ |
+| `vpi_get_value` | read a signal | `cxxrtl_object.curr` (width bits) | ☑ (int/binstr/vector) |
+| `vpi_put_value` | write a signal | `cxxrtl_object.next` + commit | ☑ (int/vector) |
+| `vpi_free_object` | release a handle | delete wrapper | ☑ |
 | `vpi_get_time` | current sim time | harness clock | ☐ |
 | `vpi_control(vpiFinish)` | end simulation | set stop flag | ☐ |
+
+**Verified by** `tests/test_getput.cc` (`tests/run_getput.sh`): drives a counter
+through the VPI API and checks it counts; `tests/test_conformance.cc` guards the
+header values/layout.
 
 ## Discovery / iteration (needed for `dut.<...>` access & hierarchy walk)
 

@@ -3,15 +3,18 @@
 // IEEE-1364 VPI provider implemented on top of cxxrtl_capi.
 //
 // This is the heart of the project: it makes a CXXRTL model look like a
-// VPI-speaking simulator, so cocotb's generic VPI consumer (libcocotbvpi) can
-// drive it unmodified. The entry points below are the subset cocotb exercises;
-// see docs/vpi-coverage.md for the full matrix and status.
+// VPI-speaking simulator, so a VPI client (cocotb's libcocotbvpi first) can
+// drive it. See docs/vpi-coverage.md for the surface and status.
 //
-// STATUS: SCAFFOLD. Each function documents its intended cxxrtl_capi mapping
-// and currently returns a safe not-implemented value. Filling these in (in the
-// order of vpi-coverage.md "MVP") is the implementation work.
+// MVP IMPLEMENTED: object access (handle-by-name, get/put value, get, get_str,
+// free_object). Callbacks / time / control are the next stage (still stubs in
+// the harness).
 
 #include <vpi_user.h>
+
+#include <cstring>
+#include <string>
+#include <vector>
 
 #include "cxxrtl_vpi/model.h"
 
@@ -20,62 +23,153 @@ namespace {
 // The single design instance, owned by the harness (see harness.cc).
 cxxrtl_vpi::Model *g_model = nullptr;
 
+// A VPI handle is an opaque pointer; we back it with this wrapper.
+struct VpiObject {
+    cxxrtl_vpi::Signal *sig;
+};
+
+VpiObject *as_obj(vpiHandle h) { return reinterpret_cast<VpiObject *>(h); }
+vpiHandle as_handle(VpiObject *o) { return reinterpret_cast<vpiHandle>(o); }
+
 }  // namespace
 
 namespace cxxrtl_vpi {
-
 // Called by the harness right after Model::create(), before VPI startup.
 void vpi_provider_bind(Model *model) { g_model = model; }
-
 }  // namespace cxxrtl_vpi
 
 // ---------------------------------------------------------------------------
 // Object access
 // ---------------------------------------------------------------------------
 
-// Resolve a signal handle by hierarchical name.
-//   maps to: cxxrtl_get(handle, name) via Model::by_name
-PLI_INT32 /*vpiHandle*/ // NOTE: real signature returns vpiHandle
-vpi_handle_by_name_stub(PLI_BYTE8 *name, vpiHandle scope) {
-    (void)scope;
-    // TODO: cxxrtl_vpi::Signal *s = g_model->by_name(name);
-    //       wrap `s` in a vpiHandle (a small struct we allocate) and return it.
-    (void)name;
-    return 0;  // null handle
+vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
+    (void)scope;  // TODO: honour scope once hierarchy iteration lands.
+    if (!g_model || !name)
+        return nullptr;
+    cxxrtl_vpi::Signal *sig = g_model->by_name(name);
+    if (!sig)
+        return nullptr;
+    return as_handle(new VpiObject{sig});
 }
 
-// Read a signal's current value.
-//   maps to: Model::read() -> repack into value_p->value.vector (s_vpi_vecval)
-//   void vpi_get_value(vpiHandle expr, p_vpi_value value_p);
-// TODO: implement against the real prototype from vpi_user.h.
+PLI_INT32 vpi_free_object(vpiHandle object) {
+    delete as_obj(object);
+    return 1;
+}
 
-// Write a signal value.
-//   maps to: Model::write() -> staged into `next`, committed at cbReadWriteSynch
-// TODO: vpiHandle vpi_put_value(vpiHandle, p_vpi_value, p_vpi_time, PLI_INT32);
+PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
+    VpiObject *o = as_obj(object);
+    if (!o)
+        return 0;
+    switch (property) {
+        case vpiSize:
+            return static_cast<PLI_INT32>(o->sig->width);
+        case vpiType:
+            // CXXRTL doesn't distinguish net vs reg at the capi level here;
+            // report writable objects as reg, others as net. Good enough for
+            // cocotb's purposes. TODO: refine via cxxrtl_flag.
+            return o->sig->object->next ? vpiReg : vpiNet;
+        default:
+            return 0;
+    }
+}
 
-// ---------------------------------------------------------------------------
-// Iteration / hierarchy (for dut.<...> discovery)
-//   maps to: walk Model::signals(); split full names on '.' for module scopes
-// TODO: vpi_iterate / vpi_scan / vpi_handle(vpiModule, ...)
-// ---------------------------------------------------------------------------
+PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
+    VpiObject *o = as_obj(object);
+    if (!o)
+        return nullptr;
+    // VPI strings are owned by the provider, valid until the next call.
+    static thread_local std::string buf;
+    switch (property) {
+        case vpiFullName:
+            buf = o->sig->name;
+            return const_cast<PLI_BYTE8 *>(buf.c_str());
+        case vpiName: {
+            // Local name = last '.'-separated component of the full name.
+            const std::string &full = o->sig->name;
+            size_t dot = full.rfind('.');
+            buf = (dot == std::string::npos) ? full : full.substr(dot + 1);
+            return const_cast<PLI_BYTE8 *>(buf.c_str());
+        }
+        default:
+            return nullptr;
+    }
+}
 
-// ---------------------------------------------------------------------------
-// Callbacks & time
-//   cbStartOfSimulation / cbEndOfSimulation : harness lifecycle
-//   cbReadWriteSynch  : flush staged writes -> Model::commit()
-//   cbReadOnlySynch   : sample after Model::eval()
-//   cbNextSimTime     : Model::step()
-//   cbAfterDelay      : harness time queue
-// TODO: vpi_register_cb / vpi_remove_cb backed by a harness-owned queue.
-// ---------------------------------------------------------------------------
+void vpi_get_value(vpiHandle expr, p_vpi_value value_p) {
+    VpiObject *o = as_obj(expr);
+    if (!o || !value_p)
+        return;
 
-// ---------------------------------------------------------------------------
-// Control
-//   vpi_control(vpiFinish/vpiStop) : signal the harness loop to stop.
-// TODO.
-// ---------------------------------------------------------------------------
+    std::vector<uint32_t> bits;
+    const size_t width = g_model->read(*o->sig, bits);
+    const size_t chunks = bits.size();
 
-// NOTE: The stubs above intentionally use placeholder names/signatures to keep
-// the scaffold compiling without a full vpi_user.h surface on every platform.
-// The implementation step replaces them with the exact prototypes from
-// IEEE 1364 vpi_user.h and registers cocotb's startup (see harness.cc).
+    switch (value_p->format) {
+        case vpiIntVal:
+            value_p->value.integer =
+                chunks ? static_cast<PLI_INT32>(bits[0]) : 0;
+            break;
+
+        case vpiBinStrVal: {
+            static thread_local std::string s;
+            s.clear();
+            for (size_t i = width; i-- > 0;) {
+                uint32_t chunk = bits[i / 32];
+                s.push_back(((chunk >> (i % 32)) & 1u) ? '1' : '0');
+            }
+            value_p->value.str = const_cast<PLI_BYTE8 *>(s.c_str());
+            break;
+        }
+
+        case vpiVectorVal: {
+            static thread_local std::vector<s_vpi_vecval> vec;
+            vec.assign(chunks ? chunks : 1, s_vpi_vecval{0, 0});
+            for (size_t i = 0; i < chunks; i++) {
+                vec[i].aval = bits[i];  // 2-state: bval stays 0
+                vec[i].bval = 0;
+            }
+            value_p->value.vector = vec.data();
+            break;
+        }
+
+        default:
+            // Unsupported format requested. TODO: vpiHexStrVal, vpiRealVal, ...
+            break;
+    }
+}
+
+vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p,
+                        p_vpi_time time_p, PLI_INT32 flags) {
+    (void)time_p;
+    (void)flags;  // TODO: honour vpiInertialDelay scheduling; MVP = NoDelay.
+    VpiObject *o = as_obj(object);
+    if (!o || !value_p)
+        return nullptr;
+
+    const size_t width = o->sig->width;
+    const size_t chunks = (width + 31) / 32;
+    std::vector<uint32_t> val(chunks, 0);
+
+    switch (value_p->format) {
+        case vpiIntVal:
+            if (chunks)
+                val[0] = static_cast<uint32_t>(value_p->value.integer);
+            break;
+
+        case vpiVectorVal:
+            for (size_t i = 0; i < chunks; i++)
+                val[i] = value_p->value.vector[i].aval;
+            break;
+
+        default:
+            // Unsupported format. TODO: string/hex formats.
+            return nullptr;
+    }
+
+    // Stage the write into `next`. The harness latches it (cxxrtl_commit) and
+    // settles (cxxrtl_eval/step) on the next time advance; for the MVP the test
+    // drives stepping explicitly.
+    g_model->write(*o->sig, val);
+    return object;
+}

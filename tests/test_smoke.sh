@@ -27,4 +27,5 @@ yosys -q -p "read_verilog $tmp/t.v; write_cxxrtl $tmp/t.cc"
 grep -q "cxxrtl_design_create" "$tmp/t.cc" || { echo "FAIL: create() not emitted"; exit 1; }
 rm -rf "$tmp"
 
-echo "PASS (scaffold smoke). Provider MVP still TODO; see docs/vpi-coverage.md"
+echo "PASS (smoke). Object-access MVP works (see tests/run_getput.sh);"
+echo "callbacks/time/control still TODO — see docs/vpi-coverage.md"

@@ -17,6 +17,8 @@ jobs:
       - name: Smoke test (toolchain + provider build + write_cxxrtl)
         run: bash tests/test_smoke.sh
 
-      # TODO: once the VPI provider implements the MVP surface, add a job that
-      # installs cocotb and runs examples/cocotb_counter `make run`, asserting
-      # results.xml reports a passing test.
+      - name: Functional MVP test (VPI handle/get/put on a counter)
+        run: bash tests/run_getput.sh
+
+      # TODO: once callbacks/time land, add a job that installs cocotb and runs
+      # examples/cocotb_counter `make run`, asserting results.xml passes.

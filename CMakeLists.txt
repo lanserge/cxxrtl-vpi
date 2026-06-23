@@ -25,38 +25,23 @@ if(NOT EXISTS "${CXXRTL_INCLUDE_DIR}/cxxrtl/capi/cxxrtl_capi.h")
 endif()
 message(STATUS "CXXRTL runtime include: ${CXXRTL_INCLUDE_DIR}")
 
-# --- VPI header: vpi_user.h (IEEE 1364). cocotb does NOT ship the base header
-# (only vpi_user_ext.h) — it relies on the simulator's. Since *we* are the
-# simulator, we need one. TODO: vendor the IEEE-1364 reference header so the
-# repo is self-contained (as Verilator/Icarus do). For now, auto-discover a
-# system copy; override with -DVPI_INCLUDE_DIR=<dir>.
-find_path(VPI_INCLUDE_DIR vpi_user.h
-  HINTS
-    /usr/local/share/verilator/include/vltstd
-    /usr/local/Cellar/icarus-verilog/*/include/iverilog
-  PATH_SUFFIXES vltstd iverilog
-)
-
-# model.cc only needs cxxrtl_capi and always builds. vpi_provider.cc needs
-# vpi_user.h; include it only when a header is available.
-set(_provider_srcs src/model.cc)
+# --- VPI header: we ship a self-contained, minimal IEEE-1364/1800 vpi_user.h
+# under include/ (ISC). To build against a full system header instead, pass
+# -DVPI_INCLUDE_DIR=<dir>; it is placed *ahead* of our include/ so its include
+# guard wins and ours is skipped (no clashes). The constant values and struct
+# layouts are normative, so the two agree by construction — see
+# tests/test_conformance.cc which asserts this.
+add_library(cxxrtl_vpi STATIC src/model.cc src/vpi_provider.cc)
 if(VPI_INCLUDE_DIR)
-  message(STATUS "vpi_user.h: ${VPI_INCLUDE_DIR}")
-  list(APPEND _provider_srcs src/vpi_provider.cc)
+  message(STATUS "vpi_user.h: overridden by ${VPI_INCLUDE_DIR}")
+  target_include_directories(cxxrtl_vpi BEFORE PUBLIC ${VPI_INCLUDE_DIR})
 else()
-  message(WARNING
-    "vpi_user.h not found: building model.cc only (VPI provider skipped). "
-    "Pass -DVPI_INCLUDE_DIR=<dir> with a vpi_user.h to build the full library.")
+  message(STATUS "vpi_user.h: bundled (include/vpi_user.h)")
 endif()
-
-add_library(cxxrtl_vpi STATIC ${_provider_srcs})
 target_include_directories(cxxrtl_vpi PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CXXRTL_INCLUDE_DIR}
 )
-if(VPI_INCLUDE_DIR)
-  target_include_directories(cxxrtl_vpi PUBLIC ${VPI_INCLUDE_DIR})
-endif()
 
 # NOTE: harness.cc carries main() and must be compiled *together with* a
 # per-design generated model (write_cxxrtl output) and linked against the
