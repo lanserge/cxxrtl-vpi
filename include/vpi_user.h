@@ -51,6 +51,8 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiName         2
 #define vpiFullName     3
 #define vpiSize         4
+#define vpiTimeUnit      11
+#define vpiTimePrecision 12
 
 /* ---- Object types (returned by vpi_get(vpiType, ...)) ---- */
 #define vpiModule       32
@@ -112,6 +114,25 @@ typedef struct t_vpi_value {
     } value;
 } s_vpi_value, *p_vpi_value;
 
+/* ---- Simulator info (cocotb reads product/version at startup) ---- */
+typedef struct t_vpi_vlog_info {
+    PLI_INT32   argc;
+    PLI_BYTE8 **argv;
+    PLI_BYTE8  *product;
+    PLI_BYTE8  *version;
+} s_vpi_vlog_info, *p_vpi_vlog_info;
+
+/* ---- Error info (for vpi_chk_error) ---- */
+typedef struct t_vpi_error_info {
+    PLI_INT32  state;
+    PLI_INT32  level;
+    PLI_BYTE8 *message;
+    PLI_BYTE8 *product;
+    PLI_BYTE8 *code;
+    PLI_BYTE8 *file;
+    PLI_INT32  line;
+} s_vpi_error_info, *p_vpi_error_info;
+
 /* ---- Callback data (layout is normative; matches IEEE 1364) ---- */
 typedef struct t_cb_data {
     PLI_INT32   reason;
@@ -125,9 +146,12 @@ typedef struct t_cb_data {
 
 /* ---- Implemented entry points ---- */
 vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope);
+vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 index);
 vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle);
 vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle);
 vpiHandle vpi_scan(vpiHandle iterator);
+PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p);
+PLI_INT32 vpi_chk_error(p_vpi_error_info error_info_p);
 vpiHandle vpi_register_cb(p_cb_data cb_data_p);
 PLI_INT32 vpi_remove_cb(vpiHandle cb_obj);
 void      vpi_get_time(vpiHandle object, p_vpi_time time_p);

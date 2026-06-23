@@ -42,17 +42,31 @@ header values/layout.
 Simplifications (MVP): a single flat toplevel scope (no nested submodules yet);
 all top-level signals reported under `vpiNet` to avoid net/reg double-listing.
 
-## Next: real cocotb bring-up
+## cocotb bring-up: status
 
-The signal + callback/time/control layers are done and tested. What remains to
-run an *actual* cocotb testbench:
+cocotb **boots end-to-end** against cxxrtl-vpi (see
+`examples/cocotb_counter/run_cocotb.sh`): the harness links `libcocotbvpi` +
+libpython, calls `vlog_startup_routines_bootstrap()`, and cocotb then:
 
-- **Hierarchy discovery** — cocotb walks the toplevel at startup via
-  `vpi_iterate` / `vpi_scan` / `vpi_handle(vpiModule, ...)`. Implement these over
-  the `cxxrtl_enum` table (split dotted names into module scopes).
-- **cocotb bootstrap** — link `libcocotbvpi`, call its
-  `vlog_startup_routines_bootstrap()` in the harness before `simulate()`, and set
-  the cocotb environment (COCOTB_TOPLEVEL, COCOTB_TEST_MODULES, ...).
+- ✅ embeds Python, registers our VPI (`vpi_get_vlog_info` → "cxxrtl-vpi 0.0.0"),
+- ✅ discovers the toplevel and signals (our `vpi_iterate`/`vpi_scan`),
+- ✅ runs the test and writes `results.xml`,
+- ✅ reports time precision so `Clock(…, "ns")` is accepted (`vpi_get(vpiTimePrecision)` = -9).
+
+The harness also needed three previously-missing VPI calls cocotb makes at
+startup: `vpi_get_vlog_info`, `vpi_chk_error`, `vpi_handle_by_index`.
+
+### Known issue: cocotb write flush (the remaining blocker)
+
+cocotb registers `cbReadWriteSynch` every step and we fire it (8000+ times in a
+short run), but cocotb's queued writes (`handle.value = x` from the test's reset
+and the clock coroutine) **never reach `vpi_put_value`** — `put_value` is called
+0 times. So the clock never toggles, no `cbValueChange` fires, and the test
+stalls on `RisingEdge(clk)`. Reordering the loop phases (timed → ReadWrite →
+settle) did not change this, so it is not a simple phase-ordering bug; it needs a
+study of cocotb 2.0's scheduler/write-application path (`cocotb/_scheduler`,
+the GPI react) to see what triggers the flush. Trace it with
+`CXXRTL_VPI_DEBUG=1` (logs register_cb / timed / put_value / value-change).
 
 ## Deferred / likely-not-needed for MVP
 

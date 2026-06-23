@@ -4,25 +4,33 @@
 // share/lib/verilator/verilator.cpp: instantiate the design, hand control to
 // the VPI startup (where cocotb registers itself), and run the event loop.
 //
-// STATUS: the model lifecycle and event loop are real (see simulate()). The
-// cocotb bootstrap is the remaining wiring: cocotb's libcocotbvpi exports a
-// startup routine that registers cbStartOfSimulation; once linked, call it
-// before simulate() so cocotb discovers the toplevel and starts its scheduler.
+// Build with -DCXXRTL_VPI_COCOTB and link cocotb's libcocotbvpi to enable the
+// cocotb bootstrap; without it, the harness runs the model with our own VPI
+// provider only (useful for non-cocotb VPI clients and tests).
+
+#include <cstdlib>
 
 #include "cxxrtl_vpi/model.h"
 #include "cxxrtl_vpi/sim.h"
 
-// cocotb's VPI bootstrap (provided by libcocotbvpi). It runs the registered
-// vlog_startup_routines, which register cbStartOfSimulation.
-//   TODO: link libcocotbvpi and enable this.
-// extern "C" void vlog_startup_routines_bootstrap(void);
+#ifdef CXXRTL_VPI_COCOTB
+// Provided by cocotb's libcocotbvpi: iterates vlog_startup_routines, each of
+// which registers cocotb's cbStartOfSimulation via vpi_register_cb.
+extern "C" void vlog_startup_routines_bootstrap(void);
+#endif
 
 int main(int /*argc*/, char ** /*argv*/) {
     cxxrtl_vpi::Model model;
     model.create();
+
+    if (const char *top = std::getenv("COCOTB_TOPLEVEL"))
+        model.set_top_name(top);
+
     cxxrtl_vpi::vpi_provider_bind(&model);
 
-    // TODO: vlog_startup_routines_bootstrap();  // cocotb registers itself here
+#ifdef CXXRTL_VPI_COCOTB
+    vlog_startup_routines_bootstrap();  // cocotb registers itself here
+#endif
 
     cxxrtl_vpi::simulate(model);
     return 0;

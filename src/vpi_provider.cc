@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -33,6 +35,15 @@ uint64_t g_time = 0;
 bool g_finished = false;
 
 constexpr uint64_t NO_DEADLINE = std::numeric_limits<uint64_t>::max();
+
+bool g_debug = false;
+#define DBG(...)                              \
+    do {                                      \
+        if (g_debug) {                        \
+            std::fprintf(stderr, "[cxxrtl-vpi] " __VA_ARGS__); \
+            std::fprintf(stderr, "\n");       \
+        }                                     \
+    } while (0)
 
 // A VPI handle is an opaque pointer. We back it with a tagged wrapper that can
 // be a signal, a module (scope), or an iterator over child handles.
@@ -140,6 +151,9 @@ bool fire_value_cbs() {
         std::vector<uint32_t> cur;
         g_model->read(*o->watch, cur);
         if (cur != o->last) {
+            DBG("value-change: %s %u->%u @t=%llu", o->watch->name.c_str(),
+                o->last.empty() ? 0 : o->last[0], cur.empty() ? 0 : cur[0],
+                (unsigned long long)g_time);
             o->last = cur;
             invoke(o);
             any = true;
@@ -168,6 +182,9 @@ void fire_timed_due() {
             ++i;
         }
     }
+    if (!due.empty())
+        DBG("timed: firing %zu cb(s) @t=%llu", due.size(),
+            (unsigned long long)g_time);
     for (CbObject *o : due) {
         invoke(o);
         delete o;
@@ -198,26 +215,38 @@ void vpi_provider_bind(Model *model) {
 
 void simulate(Model &model) {
     g_model = &model;
+    g_debug = std::getenv("CXXRTL_VPI_DEBUG") != nullptr;
 
+    DBG("start: %zu start cbs, %zu timed, %zu value", g_startsim.size(),
+        g_timed.size(), g_value.size());
     fire_oneshot(g_startsim);
+    // Flush writes queued during startup (e.g. initial reset), then settle.
+    fire_oneshot(g_rw);
     settle();
 
     while (!g_finished) {
-        settle();
-        fire_oneshot(g_rw);
-        settle();
+        // Read-only sampling region for the settled current state.
         fire_oneshot(g_ro);
 
         uint64_t next = next_deadline();
+        DBG("t=%llu: next=%llu timed=%zu value=%zu rw=%zu",
+            (unsigned long long)g_time, (unsigned long long)next,
+            g_timed.size(), g_value.size(), g_rw.size());
         if (next == NO_DEADLINE)
             break;  // no more events scheduled
         g_time = next;
 
+        // Advance: NextSimTime, then timed callbacks (cocotb coroutines resume
+        // here and queue writes), then flush those writes in the ReadWrite
+        // region and settle so value-change callbacks see the new values.
         fire_oneshot(g_nextsim);
-        fire_timed_due();  // clock toggles, cocotb timers, ...
+        fire_timed_due();
+        settle();
+        fire_oneshot(g_rw);
         settle();
     }
 
+    DBG("done at t=%llu (finished=%d)", (unsigned long long)g_time, g_finished);
     fire_oneshot(g_endsim);
 }
 
@@ -290,7 +319,41 @@ vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
     return nullptr;
 }
 
+vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 index) {
+    (void)object;
+    (void)index;
+    // TODO: bit/element select. Null is a valid "not found" response.
+    return nullptr;
+}
+
+PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p) {
+    if (!vlog_info_p)
+        return 0;
+    static char product[] = "cxxrtl-vpi";
+    static char version[] = "0.0.0";
+    static char arg0[] = "cxxrtl-vpi";
+    static char *argv[] = {arg0};
+    vlog_info_p->argc = 1;
+    vlog_info_p->argv = argv;
+    vlog_info_p->product = product;
+    vlog_info_p->version = version;
+    return 1;
+}
+
+PLI_INT32 vpi_chk_error(p_vpi_error_info error_info_p) {
+    // We never raise VPI errors yet; report "no error".
+    if (error_info_p)
+        error_info_p->level = 0;
+    return 0;
+}
+
 PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
+    // Global time properties are queried with a NULL object. We run on an
+    // integer time axis in nanoseconds, so report precision/unit = -9. cocotb
+    // uses this to scale Timer/Clock values onto our scheduler's units.
+    if (property == vpiTimePrecision || property == vpiTimeUnit)
+        return -9;
+
     VpiObject *o = as_obj(object);
     if (!o)
         return 0;
@@ -408,6 +471,8 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
             return nullptr;
     }
 
+    DBG("put_value: %s = %u (fmt=%d) @t=%llu", o->sig->name.c_str(),
+        val.empty() ? 0 : val[0], value_p->format, (unsigned long long)g_time);
     g_model->write(*o->sig, val);  // staged into `next`; latched by settle()
     return object;
 }
@@ -433,6 +498,8 @@ vpiHandle vpi_register_cb(p_cb_data cb_data_p) {
         o->time = *cb_data_p->time;
         o->data.time = &o->time;  // point at our own storage
     }
+    DBG("register_cb reason=%d @t=%llu", cb_data_p->reason,
+        (unsigned long long)g_time);
 
     switch (cb_data_p->reason) {
         case cbAfterDelay:
