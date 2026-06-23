@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -88,9 +89,53 @@ VpiObject *make_iter(std::vector<vpiHandle> items) {
     return o;
 }
 
-// A top-level signal is one with no hierarchy separator in its name.
-bool is_top_level(const cxxrtl_vpi::Signal &s) {
-    return s.name.find('.') == std::string::npos;
+// CXXRTL uses ' ' as the hierarchy separator in object names; VPI/cocotb use
+// '.'. These translate between the two conventions.
+std::string dots_to_spaces(std::string s) {
+    for (char &c : s)
+        if (c == '.')
+            c = ' ';
+    return s;
+}
+std::string spaces_to_dots(std::string s) {
+    for (char &c : s)
+        if (c == ' ')
+            c = '.';
+    return s;
+}
+
+// Local (leaf) name = last space-separated component.
+std::string leaf_name(const std::string &name) {
+    size_t p = name.rfind(' ');
+    return p == std::string::npos ? name : name.substr(p + 1);
+}
+
+// Is `name` a direct child object of `scope` (both CXXRTL-style)? scope=="" is
+// the top scope.
+bool is_direct_child(const std::string &name, const std::string &scope) {
+    if (scope.empty())
+        return name.find(' ') == std::string::npos;
+    if (name.rfind(scope + " ", 0) != 0)
+        return false;
+    return name.substr(scope.size() + 1).find(' ') == std::string::npos;
+}
+
+// If `name` lies below `scope`, return the immediate child sub-scope prefix it
+// implies (one level down), else "".
+std::string child_scope_of(const std::string &name, const std::string &scope) {
+    std::string rest;
+    if (scope.empty()) {
+        rest = name;
+    } else {
+        if (name.rfind(scope + " ", 0) != 0)
+            return "";
+        rest = name.substr(scope.size() + 1);
+    }
+    size_t sp = rest.find(' ');
+    if (sp == std::string::npos)
+        return "";  // a direct signal, not a sub-scope
+    std::string child = rest.substr(0, sp);
+    return scope.empty() ? child : scope + " " + child;
 }
 CbObject *as_cb(vpiHandle h) { return reinterpret_cast<CbObject *>(h); }
 vpiHandle cb_handle(CbObject *o) { return reinterpret_cast<vpiHandle>(o); }
@@ -257,45 +302,73 @@ void simulate(Model &model) {
 // ===========================================================================
 
 vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
-    (void)scope;  // flat lookup; both "clk" and "<top>.clk" are accepted below.
+    (void)scope;  // names below are absolute (or stripped of the toplevel).
     if (!g_model || !name)
         return nullptr;
 
-    std::string n(name);
-    cxxrtl_vpi::Signal *sig = g_model->by_name(n);
-    if (!sig) {
-        // cocotb often qualifies with the toplevel ("counter.clk"); our enum
-        // names top ports without that prefix, so strip a leading "<top>.".
-        const std::string &top = g_model->top_name();
-        if (!top.empty() && n.rfind(top + ".", 0) == 0)
-            sig = g_model->by_name(n.substr(top.size() + 1));
+    std::string n(name);  // dotted, possibly "<top>.a.b"
+    const std::string &top = g_model->top_name();
+    if (!top.empty()) {
+        if (n == top)
+            return obj_handle(make_module(""));  // the toplevel scope
+        if (n.rfind(top + ".", 0) == 0)
+            n = n.substr(top.size() + 1);
     }
-    if (!sig)
-        return nullptr;
-    return obj_handle(make_signal(sig));
+
+    std::string cx = dots_to_spaces(n);
+    if (cxxrtl_vpi::Signal *sig = g_model->by_name(cx))
+        return obj_handle(make_signal(sig));
+
+    // Not a signal — is it a sub-scope (module instance)?
+    for (const auto &s : g_model->signals())
+        if (s.name.rfind(cx + " ", 0) == 0)
+            return obj_handle(make_module(cx));
+
+    return nullptr;
 }
 
-// Discover the root (toplevel) module: vpi_iterate(vpiModule, NULL).
+// Hierarchy iteration. The toplevel is vpi_iterate(vpiModule, NULL); a module's
+// signals are vpi_iterate(vpiNet, module) and its sub-modules are
+// vpi_iterate(vpiModule, module). A module handle carries its CXXRTL scope
+// prefix ("" for the toplevel).
 vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
     if (!g_model)
         return nullptr;
 
     if (type == vpiModule && refHandle == nullptr) {
-        std::vector<vpiHandle> items{obj_handle(make_module(g_model->top_name()))};
+        std::vector<vpiHandle> items{obj_handle(make_module(""))};  // toplevel
         return obj_handle(make_iter(std::move(items)));
     }
 
-    // Children of the root module. CXXRTL's capi doesn't cleanly separate
-    // nets from regs, so for the MVP we return all top-level signals under
-    // vpiNet (and nothing under vpiReg) to avoid double-listing. TODO: refine
-    // net/reg classification via cxxrtl_flag once needed.
     VpiObject *ref = as_obj(refHandle);
-    if (type == vpiNet && ref && ref->kind == H_MODULE) {
+    if (!ref || ref->kind != H_MODULE)
+        return nullptr;
+    const std::string scope = ref->name;  // CXXRTL scope prefix
+
+    // Signals directly in this scope. CXXRTL's capi doesn't cleanly separate
+    // nets from regs, so report everything under vpiNet (nothing under vpiReg)
+    // to avoid double-listing.
+    if (type == vpiNet) {
         std::vector<vpiHandle> items;
         for (const auto &s : g_model->signals())
-            if (is_top_level(s))
+            if (is_direct_child(s.name, scope))
                 items.push_back(obj_handle(
                     make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+        return obj_handle(make_iter(std::move(items)));
+    }
+    if (type == vpiReg) {
+        return obj_handle(make_iter({}));
+    }
+
+    // Direct sub-modules (deduped child scopes).
+    if (type == vpiModule) {
+        std::set<std::string> seen;
+        std::vector<vpiHandle> items;
+        for (const auto &s : g_model->signals()) {
+            std::string cs = child_scope_of(s.name, scope);
+            if (!cs.empty() && seen.insert(cs).second)
+                items.push_back(obj_handle(make_module(cs)));
+        }
         return obj_handle(make_iter(std::move(items)));
     }
     return nullptr;
@@ -377,29 +450,33 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
         return nullptr;
     static thread_local std::string buf;
 
+    const std::string &top = g_model->top_name();
+
     if (o->kind == H_MODULE) {
-        if (property == vpiName || property == vpiFullName) {
-            buf = o->name;
-            return const_cast<PLI_BYTE8 *>(buf.c_str());
+        const std::string &scope = o->name;  // CXXRTL scope prefix ("" = top)
+        switch (property) {
+            case vpiName:
+                buf = scope.empty() ? top : leaf_name(scope);
+                return const_cast<PLI_BYTE8 *>(buf.c_str());
+            case vpiFullName:
+                buf = scope.empty() ? top : top + "." + spaces_to_dots(scope);
+                return const_cast<PLI_BYTE8 *>(buf.c_str());
+            default:
+                return nullptr;
         }
-        return nullptr;
     }
     if (o->kind != H_SIGNAL)
         return nullptr;
 
     switch (property) {
         case vpiFullName: {
-            // Present signals under the toplevel scope cocotb expects.
-            const std::string &top = g_model->top_name();
-            buf = top.empty() ? o->sig->name : top + "." + o->sig->name;
+            std::string dotted = spaces_to_dots(o->sig->name);
+            buf = top.empty() ? dotted : top + "." + dotted;
             return const_cast<PLI_BYTE8 *>(buf.c_str());
         }
-        case vpiName: {
-            const std::string &full = o->sig->name;
-            size_t dot = full.rfind('.');
-            buf = (dot == std::string::npos) ? full : full.substr(dot + 1);
+        case vpiName:
+            buf = leaf_name(o->sig->name);
             return const_cast<PLI_BYTE8 *>(buf.c_str());
-        }
         default:
             return nullptr;
     }
@@ -467,7 +544,19 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
             for (size_t i = 0; i < chunks; i++)
                 val[i] = value_p->value.vector[i].aval;
             break;
+        case vpiBinStrVal: {
+            const char *s = value_p->value.str;
+            size_t len = s ? std::strlen(s) : 0;
+            for (size_t i = 0; i < len && i < width; i++) {
+                // string is MSB-first; bit (len-1-i) maps to value bit i
+                if (s[len - 1 - i] == '1')
+                    val[i / 32] |= uint32_t(1) << (i % 32);
+            }
+            break;
+        }
         default:
+            DBG("put_value: %s UNSUPPORTED format=%d", o->sig->name.c_str(),
+                value_p->format);
             return nullptr;
     }
 

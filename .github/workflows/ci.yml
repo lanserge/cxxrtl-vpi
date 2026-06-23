@@ -26,9 +26,11 @@ jobs:
       - name: Hierarchy-discovery test (vpi_iterate/scan/handle)
         run: bash tests/run_hierarchy.sh
 
-      - name: End-to-end cocotb test (unmodified testbench on CXXRTL)
+      - name: End-to-end cocotb tests (unmodified testbenches on CXXRTL)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install cocotb
-          PYTHON=python bash examples/cocotb_counter/run_cocotb.sh | tee cocotb.log
-          grep -q "PASS=1 FAIL=0" cocotb.log
+          python -m pip install -e . cocotb
+          PYTHON=python bash examples/cocotb_counter/run_cocotb.sh | tee c.log
+          grep -q "PASS=1 FAIL=0" c.log
+          PYTHON=python bash examples/cocotb_hier/run_cocotb.sh | tee h.log
+          grep -q "PASS=1 FAIL=0" h.log

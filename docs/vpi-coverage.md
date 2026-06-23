@@ -34,13 +34,22 @@ header values/layout.
 | VPI function | cxxrtl_capi mapping | Status |
 |---|---|---|
 | `vpi_iterate(vpiModule, NULL)` | root toplevel handle | ☑ |
-| `vpi_iterate(vpiNet, module)` / `vpi_scan` | top-level signals from the enum table | ☑ |
-| `vpi_handle_by_name` (qualified + bare) | `cxxrtl_get` with `<top>.` strip | ☑ |
+| `vpi_iterate(vpiNet, module)` / `vpi_scan` | a scope's direct signals | ☑ |
+| `vpi_iterate(vpiModule, module)` | a scope's direct sub-modules | ☑ |
+| `vpi_handle_by_name` (signals + module scopes) | `cxxrtl_get`, `.`↔` ` translation, `<top>.` strip | ☑ |
 | `vpi_handle(type, ref)` | parent/scope nav | ☐ (stub) |
 | `vpi_free_object` | free our wrapper handle | ☑ |
 
-Simplifications (MVP): a single flat toplevel scope (no nested submodules yet);
-all top-level signals reported under `vpiNet` to avoid net/reg double-listing.
+Hierarchy notes: CXXRTL names objects with a space separator (`u_inner dout`);
+we translate to/from VPI's dotted form. Nested sub-modules are supported
+(`dut.u_inner.dout`). Signals are reported under `vpiNet` (none under `vpiReg`)
+to avoid net/reg double-listing.
+
+## Signal values
+
+Get/put support `vpiIntVal`, `vpiVectorVal`, and `vpiBinStrVal`; wide
+(>32-bit, multi-chunk) signals work, with padding bits masked. cocotb writes
+wide values as `vpiBinStrVal`, so that format is required, not optional.
 
 ## cocotb bring-up: WORKING ✅
 

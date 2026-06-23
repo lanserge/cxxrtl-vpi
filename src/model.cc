@@ -18,6 +18,7 @@ Model::~Model() {
 void Model::enum_cb(void *data, const char *name,
                     cxxrtl_object *object, size_t parts) {
     auto *self = static_cast<Model *>(data);
+    (void)parts;
 
     // cxxrtl_enum reports each object once; `parts` > 1 for split (memory)
     // objects. For the MVP we register scalar/vector wires and regs.
@@ -51,7 +52,9 @@ size_t Model::read(const Signal &sig, std::vector<uint32_t> &out) const {
     out.assign(chunks, 0);
     if (sig.object->curr)
         std::memcpy(out.data(), sig.object->curr, chunks * sizeof(uint32_t));
-    // TODO: mask the top chunk to `width` bits.
+    // Mask padding bits in the top chunk for non-multiple-of-32 widths.
+    if (chunks && (sig.width % 32) != 0)
+        out[chunks - 1] &= (uint32_t(1) << (sig.width % 32)) - 1;
     return sig.width;
 }
 
