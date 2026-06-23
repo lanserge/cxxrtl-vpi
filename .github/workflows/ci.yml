@@ -20,5 +20,9 @@ jobs:
       - name: Functional MVP test (VPI handle/get/put on a counter)
         run: bash tests/run_getput.sh
 
-      # TODO: once callbacks/time land, add a job that installs cocotb and runs
-      # examples/cocotb_counter `make run`, asserting results.xml passes.
+      - name: Callback/time test (cocotb-style clock + edges + finish)
+        run: bash tests/run_callbacks.sh
+
+      # TODO: real cocotb bring-up — install cocotb, link libcocotbvpi + the
+      # bootstrap, implement vpi_iterate/scan for hierarchy discovery, then run
+      # examples/cocotb_counter `make run` and assert results.xml passes.

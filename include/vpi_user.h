@@ -112,8 +112,23 @@ typedef struct t_vpi_value {
     } value;
 } s_vpi_value, *p_vpi_value;
 
+/* ---- Callback data (layout is normative; matches IEEE 1364) ---- */
+typedef struct t_cb_data {
+    PLI_INT32   reason;
+    PLI_INT32 (*cb_rtn)(struct t_cb_data *);
+    vpiHandle   obj;
+    p_vpi_time  time;
+    p_vpi_value value;
+    PLI_INT32   index;
+    PLI_BYTE8  *user_data;
+} s_cb_data, *p_cb_data;
+
 /* ---- Implemented entry points ---- */
 vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope);
+vpiHandle vpi_register_cb(p_cb_data cb_data_p);
+PLI_INT32 vpi_remove_cb(vpiHandle cb_obj);
+void      vpi_get_time(vpiHandle object, p_vpi_time time_p);
+PLI_INT32 vpi_control(PLI_INT32 operation, ...);
 void      vpi_get_value(vpiHandle expr, p_vpi_value value_p);
 vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p,
                         p_vpi_time time_p, PLI_INT32 flags);
