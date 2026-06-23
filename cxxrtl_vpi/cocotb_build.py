@@ -19,14 +19,21 @@ from cxxrtl_vpi import cxxrtl_runtime_include, write_cxxrtl
 
 
 def _repo_cxx_dir():
-    """Directory containing the provider C++ sources (src/, include/)."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if not os.path.isfile(os.path.join(root, "src", "vpi_provider.cc")):
-        raise FileNotFoundError(
-            "cxxrtl-vpi C++ sources not found next to the package. For an "
-            "editable/source install they live in <repo>/src; for a wheel they "
-            "must be packaged (see pyproject package-data).")
-    return root
+    """Directory containing the provider C++ sources (with src/ and include/).
+
+    For a wheel install this is cxxrtl_vpi/_cxx/ (bundled by setup.py's build
+    hook); for an editable/source install it is the repo root.
+    """
+    pkg = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(pkg, "_cxx"),       # wheel install
+        os.path.dirname(pkg),            # editable / source checkout (repo root)
+    ]
+    for root in candidates:
+        if os.path.isfile(os.path.join(root, "src", "vpi_provider.cc")):
+            return root
+    raise FileNotFoundError(
+        "cxxrtl-vpi C++ sources not found (looked in %s)." % ", ".join(candidates))
 
 
 def cocotb_config(python=None):
