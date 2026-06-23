@@ -90,10 +90,27 @@ ReadWrite-phase model our scheduler doesn't reproduce, so writes never reached
 each write immediately via `vpi_put_value`. Writes flow, the clock toggles, the
 test passes. Trace the scheduler with `CXXRTL_VPI_DEBUG=1`.
 
-## Deferred / likely-not-needed for MVP
+## Object classification & ranges
 
-- `vpiMemory` / arrays, force/release, `vpiNamedEvent`.
-- 4-state (X/Z) value formats — CXXRTL is 2-state.
+`vpi_get(vpiType)` distinguishes **net / reg / memory** from `cxxrtl_object`:
+`depth > 1` → `vpiMemory`; `CXXRTL_DRIVEN_SYNC` (a flop/latch output) → `vpiReg`;
+else `vpiNet`. `vpi_iterate` returns nets under `vpiNet` and regs+memories under
+`vpiReg`, so cocotb's union sees each object once with the right kind.
+`vpi_get(vpiLeftRange/vpiRightRange)` reports bit ranges (`lsb_at + width - 1`
+down to `lsb_at`) for vectors and address ranges for memories — used by cocotb
+for slicing and array bounds.
+
+## Known limitations
+
+- **4-state (X/Z): not supported — inherent to CXXRTL.** Like Verilator (and
+  unlike Icarus, which is a 4-state interpreter), CXXRTL is a 2-state engine.
+  `s_vpi_vecval.bval` is always 0; X/Z written by a testbench collapse to 0.
+  This cannot be fixed in the VPI layer — the engine never computes X/Z.
+- **force/release**: `vpi_put_value` flags are ignored; a write behaves like a
+  deposit (in trust-inertial mode it applies immediately). True force/release
+  (override + later restore) is not tracked.
+- **Packed multi-dim arrays / structs, named events**: not handled. Packed
+  vectors appear as plain wide signals.
 
 ## Notes
 

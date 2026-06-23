@@ -41,24 +41,35 @@ int main() {
         return 1;
     }
 
-    // 2. Iterate the toplevel's signals.
-    std::set<std::string> found;
-    vpiHandle sig_it = vpi_iterate(vpiNet, root);
-    if (!sig_it) {
-        printf("FAIL: vpi_iterate(vpiNet, root) returned null\n");
-        return 1;
+    // 2. Iterate the toplevel's signals across nets and regs (cocotb unions
+    //    both). `count` is a flop output, so it must classify as a reg.
+    std::set<std::string> nets, regs, found;
+    for (PLI_INT32 ty : {vpiNet, vpiReg}) {
+        vpiHandle it = vpi_iterate(ty, root);
+        if (!it) {
+            printf("FAIL: vpi_iterate returned null for type %d\n", ty);
+            return 1;
+        }
+        while (vpiHandle s = vpi_scan(it)) {
+            std::string n = vpi_get_str(vpiName, s);
+            found.insert(n);
+            (ty == vpiReg ? regs : nets).insert(n);
+            vpi_free_object(s);
+        }
     }
-    while (vpiHandle s = vpi_scan(sig_it)) {
-        found.insert(vpi_get_str(vpiName, s));
-        vpi_free_object(s);
-    }
-    printf("toplevel signals:");
-    for (const auto &n : found)
-        printf(" %s", n.c_str());
+    printf("nets:");
+    for (const auto &n : nets) printf(" %s", n.c_str());
+    printf("  regs:");
+    for (const auto &n : regs) printf(" %s", n.c_str());
     printf("\n");
+
     std::set<std::string> expect{"clk", "count", "rst"};
     if (found != expect) {
         printf("FAIL: signal set mismatch\n");
+        return 1;
+    }
+    if (regs.count("count") == 0 || nets.count("count") != 0) {
+        printf("FAIL: 'count' should classify as a reg (flop output)\n");
         return 1;
     }
 

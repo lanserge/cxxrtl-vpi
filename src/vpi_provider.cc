@@ -123,6 +123,16 @@ std::string parent_scope(const std::string &name) {
     return p == std::string::npos ? "" : name.substr(0, p);
 }
 
+// VPI object type for a CXXRTL object: memory if it has depth, reg if its bits
+// are driven by a storage cell (a flop/latch), else net.
+PLI_INT32 classify(const cxxrtl_object *obj) {
+    if (obj->depth > 1)
+        return vpiMemory;
+    if (obj->flags & CXXRTL_DRIVEN_SYNC)
+        return vpiReg;
+    return vpiNet;
+}
+
 // Is `name` a direct child object of `scope` (both CXXRTL-style)? scope=="" is
 // the top scope.
 bool is_direct_child(const std::string &name, const std::string &scope) {
@@ -358,19 +368,21 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
         return nullptr;
     const std::string scope = ref->name;  // CXXRTL scope prefix
 
-    // Signals directly in this scope. CXXRTL's capi doesn't cleanly separate
-    // nets from regs, so report everything under vpiNet (nothing under vpiReg)
-    // to avoid double-listing.
-    if (type == vpiNet) {
+    // Signals directly in this scope, classified into nets vs regs (memories
+    // are surfaced under vpiReg, the conventional place for Verilog reg-arrays).
+    if (type == vpiNet || type == vpiReg) {
         std::vector<vpiHandle> items;
-        for (const auto &s : g_model->signals())
-            if (is_direct_child(s.name, scope))
+        for (const auto &s : g_model->signals()) {
+            if (!is_direct_child(s.name, scope))
+                continue;
+            PLI_INT32 t = classify(s.object);
+            bool match = (type == vpiNet) ? (t == vpiNet)
+                                          : (t == vpiReg || t == vpiMemory);
+            if (match)
                 items.push_back(obj_handle(
                     make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+        }
         return obj_handle(make_iter(std::move(items)));
-    }
-    if (type == vpiReg) {
-        return obj_handle(make_iter({}));
     }
 
     // Direct sub-modules (deduped child scopes).
@@ -486,18 +498,26 @@ PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
                 return vpiReg;
             case vpiIndex:
                 return o->elem_index;
+            case vpiLeftRange:
+                return static_cast<PLI_INT32>(o->elem_width) - 1;
+            case vpiRightRange:
+                return 0;
             default:
                 return 0;
         }
     }
 
     cxxrtl_object *obj = o->sig->object;
-    if (obj->depth > 1) {  // memory/array
+    if (obj->depth > 1) {  // memory/array: ranges describe the address space
         switch (property) {
             case vpiSize:
                 return static_cast<PLI_INT32>(obj->depth);
             case vpiType:
                 return vpiMemory;
+            case vpiLeftRange:
+                return static_cast<PLI_INT32>(obj->zero_at + obj->depth - 1);
+            case vpiRightRange:
+                return static_cast<PLI_INT32>(obj->zero_at);
             default:
                 return 0;
         }
@@ -507,7 +527,11 @@ PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
         case vpiSize:
             return static_cast<PLI_INT32>(o->sig->width);
         case vpiType:
-            return obj->next ? vpiReg : vpiNet;
+            return classify(obj);
+        case vpiLeftRange:
+            return static_cast<PLI_INT32>(obj->lsb_at + o->sig->width - 1);
+        case vpiRightRange:
+            return static_cast<PLI_INT32>(obj->lsb_at);
         default:
             return 0;
     }

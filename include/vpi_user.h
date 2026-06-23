@@ -68,6 +68,10 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiParent       81
 #define vpiScope        84
 
+/* ---- Vector / array range ---- */
+#define vpiLeftRange    79
+#define vpiRightRange   83
+
 /* ---- Scalar bit values ---- */
 #define vpi0            0
 #define vpi1            1
