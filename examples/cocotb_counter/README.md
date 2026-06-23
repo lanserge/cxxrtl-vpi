@@ -27,9 +27,13 @@ cocotb runs test_counter.py  →  results.xml
 ## Run
 
 ```sh
-make run
+PYTHON=/path/to/venv/bin/python bash run_cocotb.sh
 ```
 
-> STATUS: scaffold. `make model` and `make build` show the real pipeline; `run`
-> is a placeholder until the VPI provider implements the MVP surface in
-> `../../docs/vpi-coverage.md`.
+where the Python has `cocotb>=2.0` installed (and `yosys` + a C++ compiler are on
+PATH). This builds the model + harness against cocotb's runtime and runs the
+test — it **passes** (`TESTS=1 PASS=1 FAIL=0`). Set `CXXRTL_VPI_DEBUG=1` to trace
+the VPI scheduler.
+
+The `Makefile` shows the lower-level build steps; `run_cocotb.sh` is the
+complete, working path.

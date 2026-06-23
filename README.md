@@ -13,9 +13,12 @@ existing generic VPI consumer can drive a CXXRTL model unmodified. But the VPI
 layer is deliberately **client-agnostic**: any VPI tool (debuggers, custom
 harnesses) can use it.
 
-> Status: **scaffold / work in progress.** The architecture, build, and the full
-> API surface are laid out; the VPI entry points are stubs that map onto
-> `cxxrtl_capi` (see `docs/vpi-coverage.md`). It does not run testbenches yet.
+> Status: **working.** An unmodified cocotb testbench runs against a CXXRTL
+> model and passes — see `examples/cocotb_counter/` (`TESTS=1 PASS=1 FAIL=0`).
+> The VPI surface (object access, callbacks/time/control, hierarchy discovery)
+> is implemented over `cxxrtl_capi` and covered by tests. See
+> `docs/vpi-coverage.md` for the coverage matrix. Early days — one flat-toplevel
+> example so far; expect rough edges on larger/hierarchical designs.
 
 ## Why this is an engine adapter, not a cocotb plugin
 

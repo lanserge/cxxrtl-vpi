@@ -20,6 +20,13 @@ extern "C" void vlog_startup_routines_bootstrap(void);
 #endif
 
 int main(int /*argc*/, char ** /*argv*/) {
+    // Our vpi_put_value stages into the model's `next` buffer and latches it on
+    // the next step()/commit — i.e. it honours inertial-write semantics. Tell
+    // cocotb it can apply writes immediately (the alternative, its deferred
+    // ReadWrite-phase queue, assumes a phase model we don't match). Don't
+    // override if the user set it explicitly.
+    setenv("COCOTB_TRUST_INERTIAL_WRITES", "1", 0);
+
     cxxrtl_vpi::Model model;
     model.create();
 

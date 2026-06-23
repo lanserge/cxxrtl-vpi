@@ -26,6 +26,9 @@ jobs:
       - name: Hierarchy-discovery test (vpi_iterate/scan/handle)
         run: bash tests/run_hierarchy.sh
 
-      # TODO: real cocotb bring-up — install cocotb, link libcocotbvpi + call
-      # vlog_startup_routines_bootstrap() in the harness, then run
-      # examples/cocotb_counter `make run` and assert results.xml passes.
+      - name: End-to-end cocotb test (unmodified testbench on CXXRTL)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cocotb
+          PYTHON=python bash examples/cocotb_counter/run_cocotb.sh | tee cocotb.log
+          grep -q "PASS=1 FAIL=0" cocotb.log

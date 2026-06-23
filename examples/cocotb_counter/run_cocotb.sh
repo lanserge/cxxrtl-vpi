@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: ISC
 #
-# EXPERIMENTAL / WIP: build the harness against cocotb's real runtime and run an
-# unmodified cocotb testbench on a CXXRTL model.
+# Build the harness against cocotb's runtime and run an unmodified cocotb
+# testbench on a CXXRTL model. This works end-to-end: cocotb embeds Python,
+# drives the design through cxxrtl-vpi, and the test passes.
 #
-# Status: cocotb boots end-to-end against cxxrtl-vpi — it embeds Python,
-# registers our VPI, discovers the toplevel, runs the test, and writes
-# results.xml. ONE known issue remains: cocotb 2.0's queued writes
-# (`handle.value = x`) are not reaching vpi_put_value, so the clock never
-# toggles and the test stalls waiting on RisingEdge. See docs/vpi-coverage.md
-# ("Known issue: cocotb write flush"). Run with CXXRTL_VPI_DEBUG=1 to trace the
-# scheduler (register_cb / timed / put_value / value-change).
-#
-# Requirements: a Python with cocotb>=2.0 installed. Point PYTHON at it:
+# Requirements: a Python with cocotb>=2.0, plus yosys and a C++ compiler on
+# PATH. Point PYTHON at that interpreter:
 #   PYTHON=/path/to/venv/bin/python bash run_cocotb.sh
+#
+# Trace the VPI scheduler with CXXRTL_VPI_DEBUG=1.
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO="$(cd ../.. && pwd)"
@@ -22,7 +18,9 @@ PYTHON="${PYTHON:-python3}"
 CFG="$PYTHON -m cocotb_tools.config"
 COCOTB_LIBDIR="$($CFG --lib-dir)"
 LIBPYTHON="$($CFG --libpython)"
-PYLIBDIR="$(dirname "$LIBPYTHON")"
+# Directory holding libpython*.{dylib,so}, and its link name (e.g. python3.13).
+PYLIBDIR="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+PYLIBNAME="python$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_config_var("LDVERSION"))')"
 INC="$(yosys-config --datdir)/include/backends/cxxrtl/runtime"
 
 TOP=counter
@@ -40,7 +38,7 @@ c++ -std=c++14 -O2 -DCXXRTL_VPI_COCOTB \
     "${TOP}_cxxrtl.cc" "$INC/cxxrtl/capi/cxxrtl_capi.cc" \
     "$REPO/src/model.cc" "$REPO/src/vpi_provider.cc" "$REPO/src/harness.cc" \
     -L"$COCOTB_LIBDIR" -lcocotbvpi_verilator -lgpi -lcocotb \
-    -L"$PYLIBDIR" -lpython3.13 \
+    -L"$PYLIBDIR" "-l$PYLIBNAME" \
     -Wl,-rpath,"$COCOTB_LIBDIR" -Wl,-rpath,"$PYLIBDIR" \
     -o "sim_$TOP"
 
@@ -51,4 +49,4 @@ export PYGPI_PYTHON_BIN="$($CFG --python-bin 2>/dev/null || echo "$PYTHON")"
 export PYTHONPATH="$WORK"
 export PATH="$COCOTB_LIBDIR:$PATH" DYLD_LIBRARY_PATH="$COCOTB_LIBDIR:$PYLIBDIR"
 "./sim_$TOP"
-echo "== results =="; cat results.xml 2>/dev/null || echo "(no results.xml)"
+echo "== results =="; cat results.xml

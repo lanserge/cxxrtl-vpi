@@ -557,6 +557,7 @@ void vpi_get_time(vpiHandle object, p_vpi_time time_p) {
 }
 
 PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
+    DBG("vpi_control op=%d @t=%llu", operation, (unsigned long long)g_time);
     if (operation == vpiFinish || operation == vpiStop)
         g_finished = true;
     return 1;

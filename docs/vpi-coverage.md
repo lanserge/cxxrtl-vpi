@@ -42,31 +42,35 @@ header values/layout.
 Simplifications (MVP): a single flat toplevel scope (no nested submodules yet);
 all top-level signals reported under `vpiNet` to avoid net/reg double-listing.
 
-## cocotb bring-up: status
+## cocotb bring-up: WORKING ✅
 
-cocotb **boots end-to-end** against cxxrtl-vpi (see
-`examples/cocotb_counter/run_cocotb.sh`): the harness links `libcocotbvpi` +
-libpython, calls `vlog_startup_routines_bootstrap()`, and cocotb then:
+An **unmodified cocotb testbench runs against a CXXRTL model and passes**
+(`examples/cocotb_counter/run_cocotb.sh` → `TESTS=1 PASS=1 FAIL=0`, clean exit).
+The harness links `libcocotbvpi` + libpython, calls
+`vlog_startup_routines_bootstrap()`, and cocotb then:
 
 - ✅ embeds Python, registers our VPI (`vpi_get_vlog_info` → "cxxrtl-vpi 0.0.0"),
-- ✅ discovers the toplevel and signals (our `vpi_iterate`/`vpi_scan`),
-- ✅ runs the test and writes `results.xml`,
-- ✅ reports time precision so `Clock(…, "ns")` is accepted (`vpi_get(vpiTimePrecision)` = -9).
+- ✅ discovers the toplevel and signals (`vpi_iterate`/`vpi_scan`),
+- ✅ drives the clock and reset through `vpi_put_value`, observes edges via
+  `cbValueChange`,
+- ✅ runs the test to completion, ends via `vpi_control(vpiFinish)`, writes
+  `results.xml`,
+- ✅ reports time precision so `Clock(…, "ns")` works (`vpi_get(vpiTimePrecision)` = -9).
 
-The harness also needed three previously-missing VPI calls cocotb makes at
-startup: `vpi_get_vlog_info`, `vpi_chk_error`, `vpi_handle_by_index`.
+Startup also needed three VPI calls cocotb makes early:
+`vpi_get_vlog_info`, `vpi_chk_error`, `vpi_handle_by_index`.
 
-### Known issue: cocotb write flush (the remaining blocker)
+### The write-flush resolution
 
-cocotb registers `cbReadWriteSynch` every step and we fire it (8000+ times in a
-short run), but cocotb's queued writes (`handle.value = x` from the test's reset
-and the clock coroutine) **never reach `vpi_put_value`** — `put_value` is called
-0 times. So the clock never toggles, no `cbValueChange` fires, and the test
-stalls on `RisingEdge(clk)`. Reordering the loop phases (timed → ReadWrite →
-settle) did not change this, so it is not a simple phase-ordering bug; it needs a
-study of cocotb 2.0's scheduler/write-application path (`cocotb/_scheduler`,
-the GPI react) to see what triggers the flush. Trace it with
-`CXXRTL_VPI_DEBUG=1` (logs register_cb / timed / put_value / value-change).
+cocotb 2.0's default (`COCOTB_TRUST_INERTIAL_WRITES=0`) defers `handle.value = x`
+writes into a queue applied only when its `_do_writes` task's `await ReadWrite()`
+fires (`cocotb/handle.py`, `cocotb/_scheduler.py:_sim_react`). That path assumes a
+ReadWrite-phase model our scheduler doesn't reproduce, so writes never reached
+`vpi_put_value`. The fix: our `vpi_put_value` already honours inertial semantics
+(stages into `next`, latched on `step()`), so the harness sets
+`COCOTB_TRUST_INERTIAL_WRITES=1` (default, user-overridable) and cocotb applies
+each write immediately via `vpi_put_value`. Writes flow, the clock toggles, the
+test passes. Trace the scheduler with `CXXRTL_VPI_DEBUG=1`.
 
 ## Deferred / likely-not-needed for MVP
 
