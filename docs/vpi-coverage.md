@@ -100,6 +100,40 @@ else `vpiNet`. `vpi_iterate` returns nets under `vpiNet` and regs+memories under
 down to `lsb_at`) for vectors and address ranges for memories — used by cocotb
 for slicing and array bounds.
 
+## cocotb regression suite results
+
+Run cocotb 2.0's own core suite (`tests/test_cases/test_cocotb`) against
+cxxrtl-vpi, using cocotb's `sample_module` built with `-D__ICARUS__` (the
+plain-Verilog subset Yosys can parse — its full SystemVerilog uses unpacked
+structs/interfaces/reals that Yosys's native frontend rejects).
+
+**Core suite: 231 PASS / 24 FAIL / 3 SKIP (~91%).** The scheduler/timing/
+concurrency core is essentially complete:
+
+| module | result | module | result |
+|---|---|---|---|
+| concurrency_primitives | 25/25 | tests | 25/25 |
+| synchronization_primitives | 9/9 | testfactory | 18/18 |
+| queues | 9/9 | async_coroutines | 4/4 |
+| async_generators | 4/4 | start_soon | 1/1 |
+| sim_time_utils | 1/1 | edge_triggers | 17/18 |
+| scheduler | 48/49 | timing_triggers | 21/23 |
+| clock | 13/15 | handle | 36/57 |
+
+The failures cluster in:
+- **`test_handle`** (19) — SV `real`/`string`/`integer` signals (don't exist in
+  the 2-state CXXRTL build), force/immediate writes, and escaped-identifier edge
+  cases. Not scheduler/VPI faults.
+- A few timing/clock edge cases (sub-ns precision; we report ns).
+
+A correctness fix this surfaced: cocotb's **deferred** (ReadWrite-region) write
+model must be used — *not* `COCOTB_TRUST_INERTIAL_WRITES`. Immediate writes break
+same-coroutine "write a signal then `await ValueChange` on it" because top-level
+inputs are CXXRTL `VALUE` objects (`next == curr`), so an immediate write changes
+the value before the callback is primed. The `simulate()` loop applies writes in
+the ReadWrite region, which both flushes correctly and preserves Edge semantics
+(`test_edge_triggers` went 2/18 → 17/18).
+
 ## Known limitations
 
 - **4-state (X/Z): not supported — inherent to CXXRTL.** Like Verilator (and

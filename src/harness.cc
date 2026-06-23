@@ -20,12 +20,13 @@ extern "C" void vlog_startup_routines_bootstrap(void);
 #endif
 
 int main(int /*argc*/, char ** /*argv*/) {
-    // Our vpi_put_value stages into the model's `next` buffer and latches it on
-    // the next step()/commit — i.e. it honours inertial-write semantics. Tell
-    // cocotb it can apply writes immediately (the alternative, its deferred
-    // ReadWrite-phase queue, assumes a phase model we don't match). Don't
-    // override if the user set it explicitly.
-    setenv("COCOTB_TRUST_INERTIAL_WRITES", "1", 0);
+    // NOTE: we deliberately do NOT force COCOTB_TRUST_INERTIAL_WRITES. cocotb's
+    // default deferred-write model (apply in the ReadWrite region) is what the
+    // simulate() loop implements, and it is also *required* for correct
+    // ValueChange/Edge semantics: a testbench that writes a signal and then
+    // awaits its change in the same coroutine relies on the write being applied
+    // after the trigger is primed. Immediate (trust-inertial) writes would make
+    // the change happen before the callback is registered, so it never fires.
 
     cxxrtl_vpi::Model model;
     model.create();
