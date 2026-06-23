@@ -42,8 +42,9 @@ def cxxrtl_runtime_include():
 
 
 def write_cxxrtl(sources, top, output, yosys="yosys",
-                 randomize_init=False, init_seed=1):
-    """Generate a CXXRTL model from Verilog sources via Yosys.
+                 randomize_init=False, init_seed=1,
+                 frontend="verilog", defines=(), slang_plugin=None):
+    """Generate a CXXRTL model from (System)Verilog sources via Yosys.
 
     Args:
         sources: list of HDL source paths.
@@ -55,17 +56,38 @@ def write_cxxrtl(sources, top, output, yosys="yosys",
             a design that secretly relies on uninitialized state passes silently;
             randomizing per-seed exposes it. Vary `init_seed` across runs.
         init_seed: integer seed for the randomization.
+        frontend: "verilog" (default) uses Yosys's native ``read_verilog -sv``,
+            which covers synthesizable Verilog and a SystemVerilog subset.
+            "slang" uses the yosys-slang plugin's ``read_slang`` for full
+            SystemVerilog (structs, interfaces, packages, ...); requires the
+            slang plugin to be installed (loaded via ``yosys -m slang``).
+        defines: macro defines to pass to the frontend (e.g. ["FOO", "BAR=1"]).
     Returns the output path.
     """
     if isinstance(sources, str):
         sources = [sources]
-    cmds = [
-        "read_verilog " + " ".join(sources),
-        f"hierarchy -top {top}",
-    ]
+
+    argv = [yosys, "-q"]
+    cmds = []
+    define_args = " ".join(f"-D{d}" for d in defines)
+
+    if frontend == "slang":
+        # Load the yosys-slang plugin: by explicit path if given, else by the
+        # installed name "slang".
+        argv += ["-m", slang_plugin or "slang"]
+        cmds.append(f"read_slang --top {top} {define_args} " + " ".join(sources))
+        # yosys-slang emits $buf cells; opt_clean lowers them for write_cxxrtl.
+        cmds.append("opt_clean")
+    elif frontend == "verilog":
+        cmds.append(f"read_verilog -sv {define_args} " + " ".join(sources))
+        cmds.append(f"hierarchy -top {top}")
+    else:
+        raise ValueError(f"unknown frontend {frontend!r} (verilog|slang)")
+
     if randomize_init:
         # proc lowers always-blocks to flops so setundef can seed their init.
         cmds += ["proc", f"setundef -init -random {int(init_seed)}"]
     cmds.append(f"write_cxxrtl {output}")
-    subprocess.run([yosys, "-q", "-p", "; ".join(cmds)], check=True)
+    argv += ["-p", "; ".join(cmds)]
+    subprocess.run(argv, check=True)
     return output

@@ -58,7 +58,8 @@ def cocotb_config(python=None):
 def build_cocotb_sim(rtl_sources, top, output, *,
                      vpi_sim="verilator", cxx=None, cxxstd="c++14",
                      opt="-O2", extra_cflags=(), python=None,
-                     randomize_init=False, init_seed=1):
+                     randomize_init=False, init_seed=1,
+                     frontend="verilog", defines=(), slang_plugin=None):
     """Build a cocotb-driven CXXRTL simulation executable.
 
     Args:
@@ -72,6 +73,9 @@ def build_cocotb_sim(rtl_sources, top, output, *,
         randomize_init: randomize uninitialized flop state (see write_cxxrtl);
             the CXXRTL analogue of Verilator's --x-initial unique.
         init_seed: integer seed for init randomization.
+        frontend: "verilog" (Yosys native, default) or "slang" (full
+            SystemVerilog via the yosys-slang plugin). See write_cxxrtl.
+        defines: macro defines passed to the frontend.
 
     Returns the output path.
     """
@@ -86,7 +90,8 @@ def build_cocotb_sim(rtl_sources, top, output, *,
     # directory (SC treats unexpected files under outputs/ as an error).
     model = f"{top}_cxxrtl.cc"
     write_cxxrtl(rtl_sources, top, model,
-                 randomize_init=randomize_init, init_seed=init_seed)
+                 randomize_init=randomize_init, init_seed=init_seed,
+                 frontend=frontend, defines=defines, slang_plugin=slang_plugin)
 
     cmd = [
         cxx, f"-std={cxxstd}", opt, "-DCXXRTL_VPI_COCOTB",

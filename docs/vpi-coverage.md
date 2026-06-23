@@ -138,6 +138,28 @@ the value before the callback is primed. The `simulate()` loop applies writes in
 the ReadWrite region, which both flushes correctly and preserves Edge semantics
 (`test_edge_triggers` went 2/18 → 17/18).
 
+## SystemVerilog frontend (verilog vs slang)
+
+`build_cocotb_sim(..., frontend=...)` / `write_cxxrtl(..., frontend=...)` choose
+how RTL is read:
+
+- **`"verilog"`** (default) — Yosys's native `read_verilog -sv`: synthesizable
+  Verilog and a SystemVerilog subset. Rejects full SV (e.g. unpacked structs:
+  *"Only PACKED supported"*).
+- **`"slang"`** — the [yosys-slang](https://github.com/povik/yosys-slang) plugin's
+  `read_slang` (followed by `opt_clean` to lower its `$buf` cells). Handles full
+  **synthesizable** SystemVerilog: unpacked structs, interfaces, packages,
+  packed/multi-dim types, generate. Pass the built plugin via
+  `slang_plugin="…/slang.so"` (and run the Yosys whose `yosys-config` built it).
+  See `examples/cocotb_slang/`.
+
+What slang does **not** unlock: non-synthesizable types like `real` and `string`.
+CXXRTL *synthesizes* to a 2-state netlist, so these aren't representable
+regardless of frontend (Verilator can model them because it's a behavioral
+simulator, not a synthesizer). cocotb's `test_handle` `real`/`string` cases
+therefore remain out of reach; its struct/interface/array cases need the slang
+frontend.
+
 ## Known limitations
 
 - **4-state (X/Z): not supported — inherent to CXXRTL.** Like Verilator (and
