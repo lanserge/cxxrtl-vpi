@@ -78,9 +78,11 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiZ            2
 #define vpiX            3
 
-/* ---- vpi_put_value() delay flags ---- */
+/* ---- vpi_put_value() flags ---- */
 #define vpiNoDelay       1
 #define vpiInertialDelay 2
+#define vpiForceFlag     5
+#define vpiReleaseFlag   6
 
 /* ---- vpi_control() operations ---- */
 #define vpiStop         66

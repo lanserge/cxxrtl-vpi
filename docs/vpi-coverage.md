@@ -117,8 +117,12 @@ concurrency core is essentially complete:
 | queues | 9/9 | async_coroutines | 4/4 |
 | async_generators | 4/4 | start_soon | 1/1 |
 | sim_time_utils | 1/1 | edge_triggers | 17/18 |
-| scheduler | 48/49 | timing_triggers | 21/23 |
-| clock | 13/15 | handle | 36/57 |
+| scheduler | 48/49 | timing_triggers | 22/23 |
+| clock | 14/15 | handle | 36/57 |
+
+Plus the standalone `test_force_release` case: **6/7** (force/release works —
+which cocotb notes it does *not* on Verilator). Time precision is reported as
+picoseconds, so sub-ns `Timer`/`Clock` values work.
 
 The failures cluster in:
 - **`test_handle`** (19) — SV `real`/`string`/`integer` signals (don't exist in
@@ -150,9 +154,11 @@ the ReadWrite region, which both flushes correctly and preserves Edge semantics
     init_seed=N)` (or `write_cxxrtl(..., randomize_init=True)`) seeds flop init
     with `setundef -init -random N`; varying the seed across runs exposes such
     dependence.
-- **force/release**: `vpi_put_value` flags are ignored; a write behaves like a
-  deposit (in trust-inertial mode it applies immediately). True force/release
-  (override + later restore) is not tracked.
+- **force/release**: supported (`vpiForceFlag`/`vpiReleaseFlag`) — a forced value
+  is re-imposed after every evaluation, overriding the design's drivers, until
+  released (6/7 of cocotb's `test_force_release`). The unhandled corner is a
+  *deposit on a forced signal* (the deposited value isn't remembered for after
+  release). cocotb's `Immediate` write action is also not specially handled.
 - **Packed multi-dim arrays / structs, named events**: not handled. Packed
   vectors appear as plain wide signals.
 

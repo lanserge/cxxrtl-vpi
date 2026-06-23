@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -244,11 +245,31 @@ bool fire_value_cbs() {
     return any;
 }
 
-// Advance combinational + sequential logic, then run value-change callbacks to
-// a fixed point (a callback may drive new values, causing more changes).
+// Forced objects: held at a fixed value, overriding the design's drivers, until
+// released. (Verilator's VPI doesn't support this; CXXRTL has no native force,
+// so we re-impose the value after every evaluation.)
+std::map<cxxrtl_object *, std::vector<uint32_t>> g_forced;
+
+void reapply_forced() {
+    for (auto &kv : g_forced) {
+        cxxrtl_object *obj = kv.first;
+        const std::vector<uint32_t> &val = kv.second;
+        const size_t chunks = (obj->width + 31) / 32;
+        for (size_t i = 0; i < chunks && i < val.size(); i++) {
+            obj->curr[i] = val[i];
+            if (obj->next)
+                obj->next[i] = val[i];
+        }
+    }
+}
+
+// Advance combinational + sequential logic, re-impose any forced values, then
+// run value-change callbacks to a fixed point (a callback may drive new values,
+// causing more changes).
 void settle() {
     do {
         g_model->step();
+        reapply_forced();
     } while (fire_value_cbs());
 }
 
@@ -490,10 +511,10 @@ PLI_INT32 vpi_chk_error(p_vpi_error_info error_info_p) {
 
 PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
     // Global time properties are queried with a NULL object. We run on an
-    // integer time axis in nanoseconds, so report precision/unit = -9. cocotb
-    // uses this to scale Timer/Clock values onto our scheduler's units.
+    // integer time axis; report picosecond precision so cocotb can represent
+    // sub-ns Timer/Clock values (it scales them onto our integer units).
     if (property == vpiTimePrecision || property == vpiTimeUnit)
-        return -9;
+        return -12;
 
     VpiObject *o = as_obj(object);
     if (!o)
@@ -640,10 +661,18 @@ void vpi_get_value(vpiHandle expr, p_vpi_value value_p) {
 
 vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p,
                         PLI_INT32 flags) {
-    (void)time_p;
-    (void)flags;  // TODO: honour vpiInertialDelay scheduling; MVP = NoDelay.
+    (void)time_p;  // delay scheduling not modelled; writes are NoDelay/inertial.
     VpiObject *o = as_obj(object);
-    if (!o || o->kind != H_SIGNAL || !value_p)
+    if (!o || o->kind != H_SIGNAL)
+        return nullptr;
+
+    // Release: stop holding the value; the design drives it again next eval.
+    if (flags == vpiReleaseFlag) {
+        if (!o->elem)
+            g_forced.erase(o->sig->object);
+        return object;
+    }
+    if (!value_p)
         return nullptr;
 
     const size_t width = o->elem ? o->elem_width : o->sig->width;
@@ -681,9 +710,17 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
             return nullptr;
     }
 
-    DBG("put_value: %s%s = %u (fmt=%d) @t=%llu", o->sig->name.c_str(),
-        o->elem ? "[elem]" : "", val.empty() ? 0 : val[0], value_p->format,
-        (unsigned long long)g_time);
+    DBG("put_value: %s%s%s = %u (fmt=%d) @t=%llu", o->sig->name.c_str(),
+        o->elem ? "[elem]" : "", flags == vpiForceFlag ? " (force)" : "",
+        val.empty() ? 0 : val[0], value_p->format, (unsigned long long)g_time);
+
+    if (flags == vpiForceFlag && !o->elem) {
+        // Hold the value against the design's drivers until released.
+        g_forced[o->sig->object] = val;
+        reapply_forced();  // take effect immediately
+        return object;
+    }
+
     if (o->elem) {
         // Memories are modified through `curr` directly (no `next` buffer).
         for (size_t i = 0; i < chunks; i++)
