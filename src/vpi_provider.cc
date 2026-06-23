@@ -34,9 +34,15 @@ bool g_finished = false;
 
 constexpr uint64_t NO_DEADLINE = std::numeric_limits<uint64_t>::max();
 
-// A VPI signal handle is an opaque pointer; back it with this wrapper.
+// A VPI handle is an opaque pointer. We back it with a tagged wrapper that can
+// be a signal, a module (scope), or an iterator over child handles.
+enum HKind { H_SIGNAL, H_MODULE, H_ITER };
 struct VpiObject {
-    cxxrtl_vpi::Signal *sig;
+    HKind kind;
+    cxxrtl_vpi::Signal *sig = nullptr;    // H_SIGNAL
+    std::string name;                     // H_MODULE: scope name
+    std::vector<vpiHandle> items;         // H_ITER: handles to hand out
+    size_t pos = 0;                       // H_ITER: scan cursor
 };
 
 // A registered callback. Also an opaque vpiHandle (returned by vpi_register_cb).
@@ -51,6 +57,30 @@ struct CbObject {
 
 VpiObject *as_obj(vpiHandle h) { return reinterpret_cast<VpiObject *>(h); }
 vpiHandle obj_handle(VpiObject *o) { return reinterpret_cast<vpiHandle>(o); }
+
+VpiObject *make_signal(cxxrtl_vpi::Signal *s) {
+    auto *o = new VpiObject;
+    o->kind = H_SIGNAL;
+    o->sig = s;
+    return o;
+}
+VpiObject *make_module(const std::string &name) {
+    auto *o = new VpiObject;
+    o->kind = H_MODULE;
+    o->name = name;
+    return o;
+}
+VpiObject *make_iter(std::vector<vpiHandle> items) {
+    auto *o = new VpiObject;
+    o->kind = H_ITER;
+    o->items = std::move(items);
+    return o;
+}
+
+// A top-level signal is one with no hierarchy separator in its name.
+bool is_top_level(const cxxrtl_vpi::Signal &s) {
+    return s.name.find('.') == std::string::npos;
+}
 CbObject *as_cb(vpiHandle h) { return reinterpret_cast<CbObject *>(h); }
 vpiHandle cb_handle(CbObject *o) { return reinterpret_cast<vpiHandle>(o); }
 
@@ -198,18 +228,75 @@ void simulate(Model &model) {
 // ===========================================================================
 
 vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
-    (void)scope;  // TODO: honour scope once hierarchy iteration lands.
+    (void)scope;  // flat lookup; both "clk" and "<top>.clk" are accepted below.
     if (!g_model || !name)
         return nullptr;
-    cxxrtl_vpi::Signal *sig = g_model->by_name(name);
+
+    std::string n(name);
+    cxxrtl_vpi::Signal *sig = g_model->by_name(n);
+    if (!sig) {
+        // cocotb often qualifies with the toplevel ("counter.clk"); our enum
+        // names top ports without that prefix, so strip a leading "<top>.".
+        const std::string &top = g_model->top_name();
+        if (!top.empty() && n.rfind(top + ".", 0) == 0)
+            sig = g_model->by_name(n.substr(top.size() + 1));
+    }
     if (!sig)
         return nullptr;
-    return obj_handle(new VpiObject{sig});
+    return obj_handle(make_signal(sig));
+}
+
+// Discover the root (toplevel) module: vpi_iterate(vpiModule, NULL).
+vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
+    if (!g_model)
+        return nullptr;
+
+    if (type == vpiModule && refHandle == nullptr) {
+        std::vector<vpiHandle> items{obj_handle(make_module(g_model->top_name()))};
+        return obj_handle(make_iter(std::move(items)));
+    }
+
+    // Children of the root module. CXXRTL's capi doesn't cleanly separate
+    // nets from regs, so for the MVP we return all top-level signals under
+    // vpiNet (and nothing under vpiReg) to avoid double-listing. TODO: refine
+    // net/reg classification via cxxrtl_flag once needed.
+    VpiObject *ref = as_obj(refHandle);
+    if (type == vpiNet && ref && ref->kind == H_MODULE) {
+        std::vector<vpiHandle> items;
+        for (const auto &s : g_model->signals())
+            if (is_top_level(s))
+                items.push_back(obj_handle(
+                    make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+        return obj_handle(make_iter(std::move(items)));
+    }
+    return nullptr;
+}
+
+vpiHandle vpi_scan(vpiHandle iterator) {
+    VpiObject *it = as_obj(iterator);
+    if (!it || it->kind != H_ITER)
+        return nullptr;
+    if (it->pos >= it->items.size()) {
+        delete it;  // VPI auto-frees an iterator once exhausted
+        return nullptr;
+    }
+    return it->items[it->pos++];
+}
+
+vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
+    (void)type;
+    (void)refHandle;
+    // TODO: parent/scope navigation if a client needs it.
+    return nullptr;
 }
 
 PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
     VpiObject *o = as_obj(object);
     if (!o)
+        return 0;
+    if (o->kind == H_MODULE)
+        return property == vpiType ? vpiModule : 0;
+    if (o->kind != H_SIGNAL)
         return 0;
     switch (property) {
         case vpiSize:
@@ -226,10 +313,24 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
     if (!o)
         return nullptr;
     static thread_local std::string buf;
-    switch (property) {
-        case vpiFullName:
-            buf = o->sig->name;
+
+    if (o->kind == H_MODULE) {
+        if (property == vpiName || property == vpiFullName) {
+            buf = o->name;
             return const_cast<PLI_BYTE8 *>(buf.c_str());
+        }
+        return nullptr;
+    }
+    if (o->kind != H_SIGNAL)
+        return nullptr;
+
+    switch (property) {
+        case vpiFullName: {
+            // Present signals under the toplevel scope cocotb expects.
+            const std::string &top = g_model->top_name();
+            buf = top.empty() ? o->sig->name : top + "." + o->sig->name;
+            return const_cast<PLI_BYTE8 *>(buf.c_str());
+        }
         case vpiName: {
             const std::string &full = o->sig->name;
             size_t dot = full.rfind('.');
@@ -243,7 +344,7 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
 
 void vpi_get_value(vpiHandle expr, p_vpi_value value_p) {
     VpiObject *o = as_obj(expr);
-    if (!o || !value_p)
+    if (!o || o->kind != H_SIGNAL || !value_p)
         return;
 
     std::vector<uint32_t> bits;
@@ -287,7 +388,7 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value value_p, p_vpi_time time_p
     (void)time_p;
     (void)flags;  // TODO: honour vpiInertialDelay scheduling; MVP = NoDelay.
     VpiObject *o = as_obj(object);
-    if (!o || !value_p)
+    if (!o || o->kind != H_SIGNAL || !value_p)
         return nullptr;
 
     const size_t width = o->sig->width;
@@ -340,7 +441,7 @@ vpiHandle vpi_register_cb(p_cb_data cb_data_p) {
             break;
         case cbValueChange: {
             VpiObject *vobj = as_obj(cb_data_p->obj);
-            if (!vobj) {
+            if (!vobj || vobj->kind != H_SIGNAL) {
                 delete o;
                 return nullptr;
             }

@@ -33,9 +33,14 @@ header values/layout.
 
 | VPI function | cxxrtl_capi mapping | Status |
 |---|---|---|
-| `vpi_iterate` / `vpi_scan` | iterate the `cxxrtl_enum` name table | ☐ |
-| `vpi_handle(vpiModule, …)` | hierarchy from dotted names in enum | ☐ |
-| `vpi_free_object` | free our wrapper handle | ☐ |
+| `vpi_iterate(vpiModule, NULL)` | root toplevel handle | ☑ |
+| `vpi_iterate(vpiNet, module)` / `vpi_scan` | top-level signals from the enum table | ☑ |
+| `vpi_handle_by_name` (qualified + bare) | `cxxrtl_get` with `<top>.` strip | ☑ |
+| `vpi_handle(type, ref)` | parent/scope nav | ☐ (stub) |
+| `vpi_free_object` | free our wrapper handle | ☑ |
+
+Simplifications (MVP): a single flat toplevel scope (no nested submodules yet);
+all top-level signals reported under `vpiNet` to avoid net/reg double-listing.
 
 ## Next: real cocotb bring-up
 

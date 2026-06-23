@@ -46,6 +46,11 @@ public:
     // All signals, in discovery order (for vpi_iterate / hierarchy walk).
     const std::vector<Signal> &signals() const { return signals_; }
 
+    // Name of the top module, as the VPI client (cocotb) expects to see it.
+    // Set from COCOTB_TOPLEVEL / the design top; used by the root module handle.
+    void set_top_name(const std::string &name) { top_name_ = name; }
+    const std::string &top_name() const { return top_name_; }
+
     // Read current value into out (one bit per uint32_t chunk packed, LSB
     // first). Returns width in bits. TODO: pack to s_vpi_vecval in the VPI layer.
     size_t read(const Signal &sig, std::vector<uint32_t> &out) const;
@@ -68,6 +73,7 @@ private:
     cxxrtl_handle handle_ = nullptr;
     std::vector<Signal> signals_;
     std::map<std::string, size_t> by_name_;  // name -> index into signals_
+    std::string top_name_;
 
     static void enum_cb(void *data, const char *name,
                         cxxrtl_object *object, size_t parts);

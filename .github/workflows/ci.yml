@@ -23,6 +23,9 @@ jobs:
       - name: Callback/time test (cocotb-style clock + edges + finish)
         run: bash tests/run_callbacks.sh
 
-      # TODO: real cocotb bring-up — install cocotb, link libcocotbvpi + the
-      # bootstrap, implement vpi_iterate/scan for hierarchy discovery, then run
+      - name: Hierarchy-discovery test (vpi_iterate/scan/handle)
+        run: bash tests/run_hierarchy.sh
+
+      # TODO: real cocotb bring-up — install cocotb, link libcocotbvpi + call
+      # vlog_startup_routines_bootstrap() in the harness, then run
       # examples/cocotb_counter `make run` and assert results.xml passes.

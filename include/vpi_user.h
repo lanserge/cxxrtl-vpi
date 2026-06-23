@@ -125,6 +125,9 @@ typedef struct t_cb_data {
 
 /* ---- Implemented entry points ---- */
 vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope);
+vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle);
+vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle);
+vpiHandle vpi_scan(vpiHandle iterator);
 vpiHandle vpi_register_cb(p_cb_data cb_data_p);
 PLI_INT32 vpi_remove_cb(vpiHandle cb_obj);
 void      vpi_get_time(vpiHandle object, p_vpi_time time_p);
