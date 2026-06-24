@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . cocotb
-          for ex in counter hier mem; do
+          for ex in counter hier mem genarray; do
             PYTHON=python bash examples/cocotb_$ex/run_cocotb.sh | tee $ex.log
             grep -q "PASS=1 FAIL=0" $ex.log
           done

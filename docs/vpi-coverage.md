@@ -36,15 +36,19 @@ header values/layout.
 | `vpi_iterate(vpiModule, NULL)` | root toplevel handle | ☑ |
 | `vpi_iterate(vpiNet, module)` / `vpi_scan` | a scope's direct signals | ☑ |
 | `vpi_iterate(vpiModule, module)` | a scope's direct sub-modules | ☑ |
-| `vpi_handle_by_name` (signals + module scopes) | `cxxrtl_get`, `.`↔` ` translation, `<top>.` strip | ☑ |
-| `vpi_handle(vpiParent/vpiScope, ref)` | drop the leaf of the CXXRTL path | ☑ |
+| `vpi_iterate(vpiGenScopeArray, module)` | a scope's generate-scope arrays | ☑ |
+| `vpi_handle_by_name` (signals + module/genscope) | canonical-name lookup, `<top>.` strip | ☑ |
+| `vpi_handle(vpiParent/vpiScope, ref)` | drop the leaf of the canonical path | ☑ |
 | `vpi_handle_by_index(mem, addr)` | memory word view into `curr` | ☑ |
+| `vpi_handle_by_index(genarray, N)` | generate-scope-array element (`dut.lane[N]`) | ☑ |
 | `vpi_free_object` | free our wrapper handle | ☑ |
 
-Hierarchy notes: CXXRTL names objects with a space separator (`u_inner dout`);
-we translate to/from VPI's dotted form. Nested sub-modules are supported
-(`dut.u_inner.dout`). Signals are reported under `vpiNet` (none under `vpiReg`)
-to avoid net/reg double-listing.
+Hierarchy notes: CXXRTL names objects with a space separator for module
+instances (`u_inner dout`) but a `.` for generate/struct hierarchy
+(`lane[0].r`). We **canonicalize** every name to the dotted form cocotb uses
+(space → `.`) and resolve against that, so both forms work uniformly. Nested
+sub-modules (`dut.u_inner.dout`) and **generate-scope arrays** (`dut.lane[i].r`,
+where `dut.lane` is a `vpiGenScopeArray`) are supported.
 
 ## Signal values
 

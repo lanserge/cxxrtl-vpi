@@ -22,9 +22,10 @@ harnesses) can use it.
 > core suite; the rest is the inherent CXXRTL-is-a-synthesizer boundary —
 > `real`/`string`, folded parameters), and **ahead** on force/release (which
 > cocotb does not support on Verilator). Implemented over `cxxrtl_capi`: object
-> access, callbacks/time/control, hierarchy + parent-nav, memories, wide signals,
-> net/reg classification, ranges, picosecond time, init-fuzzing, VCD tracing, and
-> an optional yosys-slang frontend for full SystemVerilog. See
+> access, callbacks/time/control, hierarchy + parent-nav, generate-scope arrays
+> (`dut.lane[i].sig`), memories, wide signals, net/reg classification, ranges,
+> picosecond time, init-fuzzing, VCD tracing, and an optional yosys-slang
+> frontend for full SystemVerilog. See
 > `docs/vpi-coverage.md` for the coverage matrix and limits.
 
 ## Why this is an engine adapter, not a cocotb plugin

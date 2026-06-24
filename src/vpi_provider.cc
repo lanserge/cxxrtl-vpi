@@ -64,11 +64,11 @@ void warn_xz_once(const char *signal) {
 
 // A VPI handle is an opaque pointer. We back it with a tagged wrapper that can
 // be a signal, a module (scope), or an iterator over child handles.
-enum HKind { H_SIGNAL, H_MODULE, H_ITER };
+enum HKind { H_SIGNAL, H_MODULE, H_ITER, H_GENARRAY };
 struct VpiObject {
     HKind kind;
     cxxrtl_vpi::Signal *sig = nullptr;    // H_SIGNAL
-    std::string name;                     // H_MODULE: scope name
+    std::string name;                     // H_MODULE scope / H_GENARRAY base
     std::vector<vpiHandle> items;         // H_ITER: handles to hand out
     size_t pos = 0;                       // H_ITER: scan cursor
 
@@ -110,32 +110,43 @@ VpiObject *make_iter(std::vector<vpiHandle> items) {
     o->items = std::move(items);
     return o;
 }
-
-// CXXRTL uses ' ' as the hierarchy separator in object names; VPI/cocotb use
-// '.'. These translate between the two conventions.
-std::string dots_to_spaces(std::string s) {
-    for (char &c : s)
-        if (c == '.')
-            c = ' ';
-    return s;
+VpiObject *make_genarray(const std::string &base) {
+    auto *o = new VpiObject;
+    o->kind = H_GENARRAY;
+    o->name = base;  // canonical base, e.g. "lane" or "u.lane"
+    return o;
 }
-std::string spaces_to_dots(std::string s) {
+
+// CXXRTL names objects with '.' for generate/struct hierarchy and a space for
+// module instances. cocotb uses '.' uniformly, so we canonicalize every name to
+// the dotted form and work in that space throughout.
+std::string canon(std::string s) {
     for (char &c : s)
         if (c == ' ')
             c = '.';
     return s;
 }
 
-// Local (leaf) name = last space-separated component.
+// Canonical-name index (dotted name -> signal), rebuilt per design.
+std::map<std::string, cxxrtl_vpi::Signal *> g_canon;
+
+void build_canon_index() {
+    g_canon.clear();
+    if (!g_model)
+        return;
+    for (const auto &s : g_model->signals())
+        g_canon[canon(s.name)] = const_cast<cxxrtl_vpi::Signal *>(&s);
+}
+
+// Last '.'-separated component of a canonical name.
 std::string leaf_name(const std::string &name) {
-    size_t p = name.rfind(' ');
+    size_t p = name.rfind('.');
     return p == std::string::npos ? name : name.substr(p + 1);
 }
 
-// Parent scope of a CXXRTL path = everything before the last separator ("" for
-// a top-level object).
+// Everything before the last '.' ("" for a top-level object).
 std::string parent_scope(const std::string &name) {
-    size_t p = name.rfind(' ');
+    size_t p = name.rfind('.');
     return p == std::string::npos ? "" : name.substr(0, p);
 }
 
@@ -149,32 +160,63 @@ PLI_INT32 classify(const cxxrtl_object *obj) {
     return vpiNet;
 }
 
-// Is `name` a direct child object of `scope` (both CXXRTL-style)? scope=="" is
-// the top scope.
+// Is canonical `name` a direct child of canonical `scope`? scope=="" is top.
 bool is_direct_child(const std::string &name, const std::string &scope) {
     if (scope.empty())
-        return name.find(' ') == std::string::npos;
-    if (name.rfind(scope + " ", 0) != 0)
+        return name.find('.') == std::string::npos;
+    if (name.rfind(scope + ".", 0) != 0)
         return false;
-    return name.substr(scope.size() + 1).find(' ') == std::string::npos;
+    return name.substr(scope.size() + 1).find('.') == std::string::npos;
 }
 
-// If `name` lies below `scope`, return the immediate child sub-scope prefix it
-// implies (one level down), else "".
+// Immediate child sub-scope of canonical `scope` implied by `name`, or "".
 std::string child_scope_of(const std::string &name, const std::string &scope) {
     std::string rest;
     if (scope.empty()) {
         rest = name;
     } else {
-        if (name.rfind(scope + " ", 0) != 0)
+        if (name.rfind(scope + ".", 0) != 0)
             return "";
         rest = name.substr(scope.size() + 1);
     }
-    size_t sp = rest.find(' ');
-    if (sp == std::string::npos)
+    size_t dot = rest.find('.');
+    if (dot == std::string::npos)
         return "";  // a direct signal, not a sub-scope
-    std::string child = rest.substr(0, sp);
-    return scope.empty() ? child : scope + " " + child;
+    std::string child = rest.substr(0, dot);
+    return scope.empty() ? child : scope + "." + child;
+}
+
+// A generate/array element component "base[idx]" -> base; else "".
+std::string elem_base(const std::string &component) {
+    size_t b = component.find('[');
+    if (b == std::string::npos || component.empty() || component.back() != ']')
+        return "";
+    return component.substr(0, b);
+}
+
+// A generated scope (vs a plain module instance) has a '[' in its leaf component.
+bool is_gen_scope(const std::string &scope) {
+    return leaf_name(scope).find('[') != std::string::npos;
+}
+
+// Sorted distinct indices of the generate-scope array `base` (elements that have
+// further hierarchy below them, i.e. base[N].something).
+std::vector<int> genarray_indices(const std::string &base) {
+    std::set<int> idx;
+    const std::string prefix = base + "[";
+    for (const auto &kv : g_canon) {
+        if (kv.first.rfind(prefix, 0) != 0)
+            continue;
+        size_t close = kv.first.find(']', prefix.size());
+        if (close == std::string::npos || close + 1 >= kv.first.size() ||
+            kv.first[close + 1] != '.')
+            continue;  // a leaf signal-array element, not a generate scope
+        try {
+            idx.insert(std::stoi(kv.first.substr(prefix.size(), close - prefix.size())));
+        } catch (...) {
+        }
+    }
+    return std::vector<int>(idx.begin(), idx.end());
 }
 CbObject *as_cb(vpiHandle h) { return reinterpret_cast<CbObject *>(h); }
 vpiHandle cb_handle(CbObject *o) { return reinterpret_cast<vpiHandle>(o); }
@@ -357,6 +399,7 @@ void vpi_provider_bind(Model *model) {
     g_model = model;
     g_time = 0;
     g_finished = false;
+    build_canon_index();
 }
 
 void simulate(Model &model) {
@@ -420,15 +463,30 @@ vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
             n = n.substr(top.size() + 1);
     }
 
-    std::string cx = dots_to_spaces(n);
-    if (cxxrtl_vpi::Signal *sig = g_model->by_name(cx))
-        return obj_handle(make_signal(sig));
+    // 1. an exact signal (canonical match)?
+    auto it = g_canon.find(n);
+    if (it != g_canon.end())
+        return obj_handle(make_signal(it->second));
 
-    // Not a signal — is it a sub-scope (module instance)?
-    for (const auto &s : g_model->signals())
-        if (s.name.rfind(cx + " ", 0) == 0)
-            return obj_handle(make_module(cx));
-
+    // 2. a module scope (has `n.<child>`) or generate-scope array (has
+    //    `n[<idx>].<child>`)?
+    bool is_scope = false, is_genarr = false;
+    for (const auto &kv : g_canon) {
+        if (kv.first.rfind(n + ".", 0) == 0) {
+            is_scope = true;
+            break;
+        }
+        if (kv.first.rfind(n + "[", 0) == 0) {
+            size_t close = kv.first.find(']', n.size() + 1);
+            if (close != std::string::npos && close + 1 < kv.first.size() &&
+                kv.first[close + 1] == '.')
+                is_genarr = true;
+        }
+    }
+    if (is_scope)
+        return obj_handle(make_module(n));
+    if (is_genarr)
+        return obj_handle(make_genarray(n));
     return nullptr;
 }
 
@@ -446,16 +504,49 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
     }
 
     VpiObject *ref = as_obj(refHandle);
-    if (!ref || ref->kind != H_MODULE)
+    if (!ref)
         return nullptr;
-    const std::string scope = ref->name;  // CXXRTL scope prefix
+
+    // Elements of a generate-scope array: vpi_iterate(vpiGenScope, genarray).
+    if (ref->kind == H_GENARRAY) {
+        std::vector<vpiHandle> items;
+        for (int i : genarray_indices(ref->name))
+            items.push_back(obj_handle(
+                make_module(ref->name + "[" + std::to_string(i) + "]")));
+        return obj_handle(make_iter(std::move(items)));
+    }
+
+    if (ref->kind != H_MODULE)
+        return nullptr;
+    const std::string scope = ref->name;  // canonical scope prefix
+
+    // All direct children at once (signals + sub-scopes). This is cocotb's
+    // discovery path (`_discover_all` iterates vpiInternalScope); generate
+    // elements come back as vpiGenScope handles, which cocotb groups by name
+    // into a vpiGenScopeArray.
+    if (type == vpiInternalScope) {
+        std::vector<vpiHandle> items;
+        std::set<std::string> seen;
+        for (const auto &s : g_model->signals()) {
+            std::string cn = canon(s.name);
+            if (is_direct_child(cn, scope)) {
+                items.push_back(obj_handle(
+                    make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+                continue;
+            }
+            std::string cs = child_scope_of(cn, scope);
+            if (!cs.empty() && seen.insert(cs).second)
+                items.push_back(obj_handle(make_module(cs)));
+        }
+        return obj_handle(make_iter(std::move(items)));
+    }
 
     // Signals directly in this scope, classified into nets vs regs (memories
     // are surfaced under vpiReg, the conventional place for Verilog reg-arrays).
     if (type == vpiNet || type == vpiReg) {
         std::vector<vpiHandle> items;
         for (const auto &s : g_model->signals()) {
-            if (!is_direct_child(s.name, scope))
+            if (!is_direct_child(canon(s.name), scope))
                 continue;
             PLI_INT32 t = classify(s.object);
             bool match = (type == vpiNet) ? (t == vpiNet)
@@ -467,14 +558,35 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
         return obj_handle(make_iter(std::move(items)));
     }
 
-    // Direct sub-modules (deduped child scopes).
+    // Direct sub-modules (plain instances; generate elements are excluded — they
+    // are reached via vpiGenScopeArray).
     if (type == vpiModule) {
         std::set<std::string> seen;
         std::vector<vpiHandle> items;
         for (const auto &s : g_model->signals()) {
-            std::string cs = child_scope_of(s.name, scope);
-            if (!cs.empty() && seen.insert(cs).second)
+            std::string cs = child_scope_of(canon(s.name), scope);
+            if (cs.empty() || is_gen_scope(cs))
+                continue;
+            if (seen.insert(cs).second)
                 items.push_back(obj_handle(make_module(cs)));
+        }
+        return obj_handle(make_iter(std::move(items)));
+    }
+
+    // Generate-scope arrays directly in this scope (deduped by base name).
+    if (type == vpiGenScopeArray) {
+        std::set<std::string> seen;
+        std::vector<vpiHandle> items;
+        for (const auto &s : g_model->signals()) {
+            std::string cs = child_scope_of(canon(s.name), scope);
+            if (cs.empty())
+                continue;
+            std::string base = elem_base(leaf_name(cs));
+            if (base.empty())
+                continue;  // not a generate element
+            std::string ga = scope.empty() ? base : scope + "." + base;
+            if (seen.insert(ga).second)
+                items.push_back(obj_handle(make_genarray(ga)));
         }
         return obj_handle(make_iter(std::move(items)));
     }
@@ -498,10 +610,10 @@ vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
         return nullptr;
 
     if (type == vpiParent || type == vpiScope) {
-        std::string path;
+        std::string path;  // canonical
         if (o->kind == H_SIGNAL) {
-            path = o->sig ? o->sig->name : std::string();
-        } else if (o->kind == H_MODULE) {
+            path = o->sig ? canon(o->sig->name) : std::string();
+        } else if (o->kind == H_MODULE || o->kind == H_GENARRAY) {
             if (o->name.empty())
                 return nullptr;  // the toplevel has no parent
             path = o->name;
@@ -513,10 +625,22 @@ vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
     return nullptr;
 }
 
-// Index into a CXXRTL memory: vpi_handle_by_index(mem, addr) -> a word view.
+// Index into a generate-scope array (-> the element scope) or a CXXRTL memory
+// (-> a word view).
 vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 index) {
     VpiObject *o = as_obj(object);
-    if (!o || o->kind != H_SIGNAL || !o->sig)
+    if (!o)
+        return nullptr;
+
+    if (o->kind == H_GENARRAY) {
+        std::string elem = o->name + "[" + std::to_string(index) + "]";
+        for (const auto &kv : g_canon)
+            if (kv.first.rfind(elem + ".", 0) == 0)
+                return obj_handle(make_module(elem));  // a generated scope
+        return nullptr;
+    }
+
+    if (o->kind != H_SIGNAL || !o->sig)
         return nullptr;
     cxxrtl_object *m = o->sig->object;
     if (m->depth <= 1)
@@ -540,7 +664,7 @@ PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p) {
     if (!vlog_info_p)
         return 0;
     static char product[] = "cxxrtl-vpi";
-    static char version[] = "0.0.0";
+    static char version[] = "0.0.2";
     static char arg0[] = "cxxrtl-vpi";
     static char *argv[] = {arg0};
     vlog_info_p->argc = 1;
@@ -568,7 +692,24 @@ PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
     if (!o)
         return 0;
     if (o->kind == H_MODULE)
-        return property == vpiType ? vpiModule : 0;
+        return property == vpiType
+                   ? (is_gen_scope(o->name) ? vpiGenScope : vpiModule)
+                   : 0;
+    if (o->kind == H_GENARRAY) {
+        std::vector<int> idx = genarray_indices(o->name);
+        switch (property) {
+            case vpiType:
+                return vpiGenScopeArray;
+            case vpiSize:
+                return static_cast<PLI_INT32>(idx.size());
+            case vpiLeftRange:
+                return idx.empty() ? 0 : idx.front();
+            case vpiRightRange:
+                return idx.empty() ? 0 : idx.back();
+            default:
+                return 0;
+        }
+    }
     if (o->kind != H_SIGNAL)
         return 0;
 
@@ -627,14 +768,14 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
 
     const std::string &top = g_model->top_name();
 
-    if (o->kind == H_MODULE) {
-        const std::string &scope = o->name;  // CXXRTL scope prefix ("" = top)
+    if (o->kind == H_MODULE || o->kind == H_GENARRAY) {
+        const std::string &scope = o->name;  // canonical prefix ("" = top)
         switch (property) {
             case vpiName:
                 buf = scope.empty() ? top : leaf_name(scope);
                 return const_cast<PLI_BYTE8 *>(buf.c_str());
             case vpiFullName:
-                buf = scope.empty() ? top : top + "." + spaces_to_dots(scope);
+                buf = scope.empty() ? top : top + "." + scope;
                 return const_cast<PLI_BYTE8 *>(buf.c_str());
             default:
                 return nullptr;
@@ -645,12 +786,12 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
 
     switch (property) {
         case vpiFullName: {
-            std::string dotted = spaces_to_dots(o->sig->name);
+            std::string dotted = canon(o->sig->name);
             buf = top.empty() ? dotted : top + "." + dotted;
             return const_cast<PLI_BYTE8 *>(buf.c_str());
         }
         case vpiName:
-            buf = leaf_name(o->sig->name);
+            buf = leaf_name(canon(o->sig->name));
             return const_cast<PLI_BYTE8 *>(buf.c_str());
         default:
             return nullptr;
