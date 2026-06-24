@@ -5,19 +5,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cxxrtl-vpi"
-version = "0.0.0"
-description = "An IEEE-1364 VPI interface for CXXRTL (Yosys C++ simulation backend)"
+version = "0.0.1"
+description = "An IEEE-1364 VPI interface for CXXRTL (Yosys C++ simulation backend), so cocotb can drive CXXRTL models"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "ISC"
 authors = [{ name = "cxxrtl-vpi contributors" }]
-keywords = ["cxxrtl", "yosys", "vpi", "cocotb", "simulation", "rtl"]
+keywords = ["cxxrtl", "yosys", "vpi", "cocotb", "simulation", "rtl", "verification", "eda"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/lanserge/cxxrtl-vpi"
+Repository = "https://github.com/lanserge/cxxrtl-vpi"
 
 [project.optional-dependencies]
 cocotb = ["cocotb>=2.0"]
-
-[project.urls]
-Homepage = "https://github.com/serge/cxxrtl-vpi"
 
 [tool.setuptools]
 packages = ["cxxrtl_vpi"]

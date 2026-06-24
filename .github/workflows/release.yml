@@ -1,0 +1,50 @@
+# Release workflow: on a v* tag, build the distributions and publish to PyPI
+# via OIDC trusted publishing (no API tokens stored in the repo).
+#
+# Trigger: push a tag matching v* (e.g. `git tag -a v0.0.1 -m "..." && git push --tags`).
+# Not on every push — an explicit tag is the gate.
+#
+# One-time PyPI setup (before the first release): on https://pypi.org, add a
+# Trusted Publisher (GitHub Actions) for the project:
+#   Owner: lanserge   Repository: cxxrtl-vpi   Workflow: release.yml   Environment: pypi
+# See https://docs.pypi.org/trusted-publishers/ — no API token is generated.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade build
+      # Pure-Python wheel (the C++ provider sources ship as package data and are
+      # compiled per-design at use time), plus the sdist.
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cxxrtl-vpi
+    permissions:
+      id-token: write  # OIDC token for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
