@@ -1,5 +1,8 @@
 # cxxrtl-vpi
 
+[![PyPI](https://img.shields.io/pypi/v/cxxrtl-vpi)](https://pypi.org/project/cxxrtl-vpi/)
+[![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
+
 **An IEEE-1364 VPI interface for [CXXRTL](https://github.com/YosysHQ/yosys), the Yosys C++ simulation backend.**
 
 CXXRTL compiles a (System)Verilog design into a fast, embeddable C++ model, but
@@ -59,13 +62,14 @@ docs/                 design rationale + VPI coverage matrix
 
 ## Install
 
-Not on PyPI yet — install from source (the cocotb path requires Python ≤ 3.13):
-
 ```sh
-pip install git+https://github.com/lanserge/cxxrtl-vpi
+pip install cxxrtl-vpi
 ```
 
-Requires **Yosys** (`yosys` / `yosys-config`) and a **C++14 compiler** on `PATH`.
+The cocotb path requires **Python ≤ 3.13** (cocotb's cap), plus **Yosys**
+(`yosys` / `yosys-config`) and a **C++14 compiler** on `PATH` — the same external
+toolchain every simulator needs. (Latest from git:
+`pip install git+https://github.com/lanserge/cxxrtl-vpi`.)
 The quickest way to see it work is the cocotb example:
 
 ```sh
