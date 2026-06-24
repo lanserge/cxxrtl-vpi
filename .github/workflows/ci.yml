@@ -3,36 +3,40 @@ name: ci
 on: [push, pull_request]
 
 jobs:
-  smoke:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Yosys + build tools
+      # Recent Yosys with CXXRTL + yosys-config (Ubuntu's apt package ships
+      # neither). Installed first; setup-python runs after so `python` is 3.13.
+      - uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"  # cocotb supports up to 3.13
+
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
+      - name: Toolchain check
         run: |
-          sudo apt-get update
-          sudo apt-get install -y yosys cmake build-essential
+          python --version
           yosys --version
+          echo "datdir: $(yosys-config --datdir)"
 
-      - name: Smoke test (toolchain + provider build + write_cxxrtl)
-        run: bash tests/test_smoke.sh
-
-      - name: Functional MVP test (VPI handle/get/put on a counter)
-        run: bash tests/run_getput.sh
-
-      - name: Callback/time test (cocotb-style clock + edges + finish)
-        run: bash tests/run_callbacks.sh
-
-      - name: Hierarchy-discovery test (vpi_iterate/scan/handle)
-        run: bash tests/run_hierarchy.sh
+      - name: Standalone tests (provider build, VPI object/callback/hierarchy)
+        run: |
+          bash tests/test_smoke.sh
+          bash tests/run_getput.sh
+          bash tests/run_callbacks.sh
+          bash tests/run_hierarchy.sh
 
       - name: End-to-end cocotb tests (unmodified testbenches on CXXRTL)
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . cocotb
-          PYTHON=python bash examples/cocotb_counter/run_cocotb.sh | tee c.log
-          grep -q "PASS=1 FAIL=0" c.log
-          PYTHON=python bash examples/cocotb_hier/run_cocotb.sh | tee h.log
-          grep -q "PASS=1 FAIL=0" h.log
-          PYTHON=python bash examples/cocotb_mem/run_cocotb.sh | tee m.log
-          grep -q "PASS=1 FAIL=0" m.log
+          for ex in counter hier mem; do
+            PYTHON=python bash examples/cocotb_$ex/run_cocotb.sh | tee $ex.log
+            grep -q "PASS=1 FAIL=0" $ex.log
+          done
