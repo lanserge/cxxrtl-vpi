@@ -35,7 +35,7 @@ yosys -q -p "read_verilog $TOP.v; hierarchy -top $TOP; write_cxxrtl ${TOP}_cxxrt
 echo "== link harness against cocotb VPI =="
 c++ -std=c++14 -O2 -DCXXRTL_VPI_COCOTB \
     -I "$REPO/include" -I"$INC" \
-    "${TOP}_cxxrtl.cc" "$INC/cxxrtl/capi/cxxrtl_capi.cc" \
+    "${TOP}_cxxrtl.cc" "$INC/cxxrtl/capi/cxxrtl_capi.cc" "$INC/cxxrtl/capi/cxxrtl_capi_vcd.cc" \
     "$REPO/src/model.cc" "$REPO/src/vpi_provider.cc" "$REPO/src/harness.cc" \
     -L"$COCOTB_LIBDIR" -lcocotbvpi_verilator -lgpi -lcocotb \
     -L"$PYLIBDIR" "-l$PYLIBNAME" \

@@ -23,6 +23,7 @@ echo "== build functional test =="
 c++ -std=c++14 -O2 -Iinclude -I"$INC" \
     "$WORK/counter_cxxrtl.cc" \
     "$INC/cxxrtl/capi/cxxrtl_capi.cc" \
+    "$INC/cxxrtl/capi/cxxrtl_capi_vcd.cc" \
     src/model.cc src/vpi_provider.cc tests/test_getput.cc \
     -o "$WORK/test_getput"
 

@@ -37,3 +37,9 @@ the VPI scheduler.
 
 The `Makefile` shows the lower-level build steps; `run_cocotb.sh` is the
 complete, working path.
+
+To dump a waveform, set `CXXRTL_VPI_VCD`:
+
+```sh
+CXXRTL_VPI_VCD=dump.vcd PYTHON=/path/to/venv/bin/python bash run_cocotb.sh
+```

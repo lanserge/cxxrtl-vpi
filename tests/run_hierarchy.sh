@@ -16,6 +16,7 @@ yosys -q -p "read_verilog examples/cocotb_counter/counter.v; \
 c++ -std=c++14 -O2 -Iinclude -I"$INC" \
     "$WORK/counter_cxxrtl.cc" \
     "$INC/cxxrtl/capi/cxxrtl_capi.cc" \
+    "$INC/cxxrtl/capi/cxxrtl_capi_vcd.cc" \
     src/model.cc src/vpi_provider.cc tests/test_hierarchy.cc \
     -o "$WORK/test_hierarchy"
 

@@ -138,6 +138,19 @@ the value before the callback is primed. The `simulate()` loop applies writes in
 the ReadWrite region, which both flushes correctly and preserves Edge semantics
 (`test_edge_triggers` went 2/18 → 17/18).
 
+## Waveform tracing (VCD)
+
+Set the `CXXRTL_VPI_VCD` environment variable to a path and the harness dumps a
+VCD of every signal, via CXXRTL's `cxxrtl_capi_vcd`:
+
+```sh
+CXXRTL_VPI_VCD=dump.vcd ./sim_<top>      # or set it in the cocotb run env
+```
+
+The timescale is picoseconds (matching the reported precision); signals are
+sampled at every settled time step. Off unless the variable is set. The build
+must link `cxxrtl_capi_vcd.cc` (handled by `build_cocotb_sim`).
+
 ## SystemVerilog frontend (verilog vs slang)
 
 `build_cocotb_sim(..., frontend=...)` / `write_cxxrtl(..., frontend=...)` choose

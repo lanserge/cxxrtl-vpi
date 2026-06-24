@@ -15,6 +15,8 @@
 
 #include <vpi_user.h>
 
+#include <cxxrtl/capi/cxxrtl_capi_vcd.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -263,6 +265,48 @@ void reapply_forced() {
     }
 }
 
+// ---- optional VCD waveform dump (CXXRTL_VPI_VCD=<path>) -------------------
+cxxrtl_vcd g_vcd = nullptr;
+std::FILE *g_vcd_file = nullptr;
+
+void vcd_drain() {
+    const char *data = nullptr;
+    size_t size = 0;
+    cxxrtl_vcd_read(g_vcd, &data, &size);
+    if (size && g_vcd_file)
+        std::fwrite(data, 1, size, g_vcd_file);
+}
+
+void vcd_sample() {
+    if (!g_vcd)
+        return;
+    cxxrtl_vcd_sample(g_vcd, g_time);
+    vcd_drain();
+}
+
+void vcd_open(cxxrtl_handle handle) {
+    const char *path = std::getenv("CXXRTL_VPI_VCD");
+    if (!path)
+        return;
+    g_vcd_file = std::fopen(path, "w");
+    if (!g_vcd_file)
+        return;
+    g_vcd = cxxrtl_vcd_create();
+    cxxrtl_vcd_timescale(g_vcd, 1, "ps");  // matches our reported precision
+    cxxrtl_vcd_add_from(g_vcd, handle);    // trace every signal
+}
+
+void vcd_close() {
+    if (!g_vcd)
+        return;
+    vcd_sample();  // final values
+    cxxrtl_vcd_destroy(g_vcd);
+    if (g_vcd_file)
+        std::fclose(g_vcd_file);
+    g_vcd = nullptr;
+    g_vcd_file = nullptr;
+}
+
 // Advance combinational + sequential logic, re-impose any forced values, then
 // run value-change callbacks to a fixed point (a callback may drive new values,
 // causing more changes).
@@ -318,6 +362,7 @@ void vpi_provider_bind(Model *model) {
 void simulate(Model &model) {
     g_model = &model;
     g_debug = std::getenv("CXXRTL_VPI_DEBUG") != nullptr;
+    vcd_open(model.handle());
 
     DBG("start: %zu start cbs, %zu timed, %zu value", g_startsim.size(),
         g_timed.size(), g_value.size());
@@ -325,6 +370,7 @@ void simulate(Model &model) {
     // Flush writes queued during startup (e.g. initial reset), then settle.
     fire_oneshot(g_rw);
     settle();
+    vcd_sample();  // initial values at t=0
 
     while (!g_finished) {
         // Read-only sampling region for the settled current state.
@@ -346,10 +392,12 @@ void simulate(Model &model) {
         settle();
         fire_oneshot(g_rw);
         settle();
+        vcd_sample();  // record the settled values for this time step
     }
 
     DBG("done at t=%llu (finished=%d)", (unsigned long long)g_time, g_finished);
     fire_oneshot(g_endsim);
+    vcd_close();
 }
 
 }  // namespace cxxrtl_vpi
