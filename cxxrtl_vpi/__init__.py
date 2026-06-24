@@ -11,7 +11,7 @@ import os
 import shutil
 import subprocess
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 
 def cxxrtl_runtime_include():

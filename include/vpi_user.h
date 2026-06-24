@@ -62,6 +62,9 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiParameter    41
 #define vpiPort         44
 #define vpiReg          48
+#define vpiConstant     7
+#define vpiNetArray     114  /* an unpacked array of nets */
+#define vpiRegArray     116  /* an unpacked array of regs */
 #define vpiGenScopeArray 133
 #define vpiGenScope      134
 #define vpiInternalScope 92  /* child objects of a scope (cocotb discovery) */

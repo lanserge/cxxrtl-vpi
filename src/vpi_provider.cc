@@ -64,13 +64,14 @@ void warn_xz_once(const char *signal) {
 
 // A VPI handle is an opaque pointer. We back it with a tagged wrapper that can
 // be a signal, a module (scope), or an iterator over child handles.
-enum HKind { H_SIGNAL, H_MODULE, H_ITER, H_GENARRAY };
+enum HKind { H_SIGNAL, H_MODULE, H_ITER, H_GENARRAY, H_SIGARRAY, H_CONST };
 struct VpiObject {
     HKind kind;
     cxxrtl_vpi::Signal *sig = nullptr;    // H_SIGNAL
-    std::string name;                     // H_MODULE scope / H_GENARRAY base
+    std::string name;     // H_MODULE scope / H_GENARRAY / H_SIGARRAY base
     std::vector<vpiHandle> items;         // H_ITER: handles to hand out
     size_t pos = 0;                       // H_ITER: scan cursor
+    int const_val = 0;                    // H_CONST: integer (e.g. range bound)
 
     // H_SIGNAL may instead be a memory-element view: `elem` points into the
     // memory's `curr` storage (memories have no `next`), with the given width.
@@ -114,6 +115,18 @@ VpiObject *make_genarray(const std::string &base) {
     auto *o = new VpiObject;
     o->kind = H_GENARRAY;
     o->name = base;  // canonical base, e.g. "lane" or "u.lane"
+    return o;
+}
+VpiObject *make_sigarray(const std::string &base) {
+    auto *o = new VpiObject;
+    o->kind = H_SIGARRAY;
+    o->name = base;  // canonical base of a leaf signal array, e.g. "stage"
+    return o;
+}
+VpiObject *make_const(int value) {
+    auto *o = new VpiObject;
+    o->kind = H_CONST;
+    o->const_val = value;  // a range bound, read back via vpi_get_value
     return o;
 }
 
@@ -211,6 +224,25 @@ std::vector<int> genarray_indices(const std::string &base) {
         if (close == std::string::npos || close + 1 >= kv.first.size() ||
             kv.first[close + 1] != '.')
             continue;  // a leaf signal-array element, not a generate scope
+        try {
+            idx.insert(std::stoi(kv.first.substr(prefix.size(), close - prefix.size())));
+        } catch (...) {
+        }
+    }
+    return std::vector<int>(idx.begin(), idx.end());
+}
+
+// Sorted distinct indices of the leaf signal array `base` (elements that are
+// themselves signals, i.e. the canonical name is exactly base[N]).
+std::vector<int> sigarray_indices(const std::string &base) {
+    std::set<int> idx;
+    const std::string prefix = base + "[";
+    for (const auto &kv : g_canon) {
+        if (kv.first.rfind(prefix, 0) != 0 || kv.first.back() != ']')
+            continue;
+        size_t close = kv.first.find(']', prefix.size());
+        if (close != kv.first.size() - 1)
+            continue;  // not exactly base[N]
         try {
             idx.insert(std::stoi(kv.first.substr(prefix.size(), close - prefix.size())));
         } catch (...) {
@@ -468,9 +500,9 @@ vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
     if (it != g_canon.end())
         return obj_handle(make_signal(it->second));
 
-    // 2. a module scope (has `n.<child>`) or generate-scope array (has
-    //    `n[<idx>].<child>`)?
-    bool is_scope = false, is_genarr = false;
+    // 2. a module scope (has `n.<child>`), a generate-scope array (has
+    //    `n[<idx>].<child>`), or a leaf signal array (has `n[<idx>]`)?
+    bool is_scope = false, is_genarr = false, is_sigarr = false;
     for (const auto &kv : g_canon) {
         if (kv.first.rfind(n + ".", 0) == 0) {
             is_scope = true;
@@ -478,15 +510,20 @@ vpiHandle vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope) {
         }
         if (kv.first.rfind(n + "[", 0) == 0) {
             size_t close = kv.first.find(']', n.size() + 1);
-            if (close != std::string::npos && close + 1 < kv.first.size() &&
-                kv.first[close + 1] == '.')
-                is_genarr = true;
+            if (close == std::string::npos)
+                continue;
+            if (close + 1 == kv.first.size())
+                is_sigarr = true;  // n[idx] is itself a signal
+            else if (kv.first[close + 1] == '.')
+                is_genarr = true;  // n[idx].child is a scope
         }
     }
     if (is_scope)
         return obj_handle(make_module(n));
     if (is_genarr)
         return obj_handle(make_genarray(n));
+    if (is_sigarr)
+        return obj_handle(make_sigarray(n));
     return nullptr;
 }
 
@@ -526,12 +563,19 @@ vpiHandle vpi_iterate(PLI_INT32 type, vpiHandle refHandle) {
     // into a vpiGenScopeArray.
     if (type == vpiInternalScope) {
         std::vector<vpiHandle> items;
-        std::set<std::string> seen;
+        std::set<std::string> seen;  // child scopes + signal-array bases
         for (const auto &s : g_model->signals()) {
             std::string cn = canon(s.name);
             if (is_direct_child(cn, scope)) {
-                items.push_back(obj_handle(
-                    make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+                std::string base = elem_base(leaf_name(cn));
+                if (!base.empty()) {  // a leaf signal-array element
+                    std::string full = scope.empty() ? base : scope + "." + base;
+                    if (seen.insert(full).second)
+                        items.push_back(obj_handle(make_sigarray(full)));
+                } else {
+                    items.push_back(obj_handle(
+                        make_signal(const_cast<cxxrtl_vpi::Signal *>(&s))));
+                }
                 continue;
             }
             std::string cs = child_scope_of(cn, scope);
@@ -613,7 +657,8 @@ vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
         std::string path;  // canonical
         if (o->kind == H_SIGNAL) {
             path = o->sig ? canon(o->sig->name) : std::string();
-        } else if (o->kind == H_MODULE || o->kind == H_GENARRAY) {
+        } else if (o->kind == H_MODULE || o->kind == H_GENARRAY ||
+                   o->kind == H_SIGARRAY) {
             if (o->name.empty())
                 return nullptr;  // the toplevel has no parent
             path = o->name;
@@ -621,6 +666,20 @@ vpiHandle vpi_handle(PLI_INT32 type, vpiHandle refHandle) {
             return nullptr;
         }
         return obj_handle(make_module(parent_scope(path)));
+    }
+
+    // Array range bounds as value-handles. cocotb's VpiArrayObjHdl reads an
+    // array's range via vpi_iterate(vpiRange) (we return none) then falls back
+    // to vpi_handle(vpiLeftRange/vpiRightRange, arrayHdl) + vpi_get_value.
+    if (type == vpiLeftRange || type == vpiRightRange) {
+        if (o->kind == H_SIGARRAY) {
+            std::vector<int> idx = sigarray_indices(o->name);
+            if (idx.empty())
+                return nullptr;
+            return obj_handle(make_const(type == vpiLeftRange ? idx.front()
+                                                              : idx.back()));
+        }
+        return nullptr;
     }
     return nullptr;
 }
@@ -638,6 +697,12 @@ vpiHandle vpi_handle_by_index(vpiHandle object, PLI_INT32 index) {
             if (kv.first.rfind(elem + ".", 0) == 0)
                 return obj_handle(make_module(elem));  // a generated scope
         return nullptr;
+    }
+
+    if (o->kind == H_SIGARRAY) {
+        auto e = g_canon.find(o->name + "[" + std::to_string(index) + "]");
+        return e == g_canon.end() ? nullptr
+                                  : obj_handle(make_signal(e->second));
     }
 
     if (o->kind != H_SIGNAL || !o->sig)
@@ -664,7 +729,7 @@ PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p) {
     if (!vlog_info_p)
         return 0;
     static char product[] = "cxxrtl-vpi";
-    static char version[] = "0.0.2";
+    static char version[] = "0.0.3";
     static char arg0[] = "cxxrtl-vpi";
     static char *argv[] = {arg0};
     vlog_info_p->argc = 1;
@@ -710,6 +775,27 @@ PLI_INT32 vpi_get(PLI_INT32 property, vpiHandle object) {
                 return 0;
         }
     }
+    if (o->kind == H_SIGARRAY) {
+        std::vector<int> idx = sigarray_indices(o->name);
+        // reg-array if elements are storage-driven, else net-array; cocotb maps
+        // both to its ArrayObject (an array of value objects).
+        bool is_reg = false;
+        if (!idx.empty()) {
+            auto e = g_canon.find(o->name + "[" + std::to_string(idx.front()) + "]");
+            if (e != g_canon.end())
+                is_reg = (classify(e->second->object) != vpiNet);
+        }
+        switch (property) {
+            case vpiType:
+                return is_reg ? vpiRegArray : vpiNetArray;
+            case vpiSize:
+                return static_cast<PLI_INT32>(idx.size());
+            default:
+                return 0;
+        }
+    }
+    if (o->kind == H_CONST)
+        return property == vpiType ? vpiConstant : 0;
     if (o->kind != H_SIGNAL)
         return 0;
 
@@ -768,7 +854,8 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
 
     const std::string &top = g_model->top_name();
 
-    if (o->kind == H_MODULE || o->kind == H_GENARRAY) {
+    if (o->kind == H_MODULE || o->kind == H_GENARRAY ||
+        o->kind == H_SIGARRAY) {
         const std::string &scope = o->name;  // canonical prefix ("" = top)
         switch (property) {
             case vpiName:
@@ -800,7 +887,15 @@ PLI_BYTE8 *vpi_get_str(PLI_INT32 property, vpiHandle object) {
 
 void vpi_get_value(vpiHandle expr, p_vpi_value value_p) {
     VpiObject *o = as_obj(expr);
-    if (!o || o->kind != H_SIGNAL || !value_p)
+    if (!o || !value_p)
+        return;
+
+    if (o->kind == H_CONST) {  // a range-bound integer
+        if (value_p->format == vpiIntVal)
+            value_p->value.integer = o->const_val;
+        return;
+    }
+    if (o->kind != H_SIGNAL)
         return;
 
     std::vector<uint32_t> bits;

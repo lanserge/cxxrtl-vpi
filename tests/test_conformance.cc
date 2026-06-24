@@ -28,6 +28,9 @@ static_assert(vpiNet == 36, "vpiNet");
 static_assert(vpiReg == 48, "vpiReg");
 static_assert(vpiGenScopeArray == 133, "vpiGenScopeArray");
 static_assert(vpiGenScope == 134, "vpiGenScope");
+static_assert(vpiNetArray == 114, "vpiNetArray");
+static_assert(vpiRegArray == 116, "vpiRegArray");
+static_assert(vpiConstant == 7, "vpiConstant");
 
 // --- put flags / control ---
 static_assert(vpiNoDelay == 1, "vpiNoDelay");

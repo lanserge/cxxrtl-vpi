@@ -41,14 +41,22 @@ header values/layout.
 | `vpi_handle(vpiParent/vpiScope, ref)` | drop the leaf of the canonical path | ☑ |
 | `vpi_handle_by_index(mem, addr)` | memory word view into `curr` | ☑ |
 | `vpi_handle_by_index(genarray, N)` | generate-scope-array element (`dut.lane[N]`) | ☑ |
+| `vpi_handle_by_index(sigarray, N)` | signal-array element (`dut.stage[N]`) | ☑ |
+| `vpi_handle(vpiLeftRange/vpiRightRange, sigarray)` | array bounds as value-handles | ☑ |
 | `vpi_free_object` | free our wrapper handle | ☑ |
 
 Hierarchy notes: CXXRTL names objects with a space separator for module
 instances (`u_inner dout`) but a `.` for generate/struct hierarchy
 (`lane[0].r`). We **canonicalize** every name to the dotted form cocotb uses
-(space → `.`) and resolve against that, so both forms work uniformly. Nested
-sub-modules (`dut.u_inner.dout`) and **generate-scope arrays** (`dut.lane[i].r`,
-where `dut.lane` is a `vpiGenScopeArray`) are supported.
+(space → `.`) and resolve against that, so both forms work uniformly. Supported:
+nested sub-modules (`dut.u_inner.dout`), **generate-scope arrays**
+(`dut.lane[i].r`, a `vpiGenScopeArray`), and **signal arrays** (`dut.stage[i]`,
+a `vpiNetArray`/`vpiRegArray` — `len`, `.range`, iteration and indexing). CXXRTL
+flattens an unpacked array `wire [7:0] stage[0:3]` into separate objects
+`stage[0..3]`; we re-expose `stage` as one array handle. cocotb reads the array
+range via `vpi_iterate(vpiRange)` (we return none) falling back to
+`vpi_handle(vpiLeftRange, arrayHdl)`, so the array dimension and the element bit
+range are queried on *different* handles — no conflict.
 
 ## Signal values
 
