@@ -13,12 +13,16 @@ existing generic VPI consumer can drive a CXXRTL model unmodified. But the VPI
 layer is deliberately **client-agnostic**: any VPI tool (debuggers, custom
 harnesses) can use it.
 
-> Status: **working.** An unmodified cocotb testbench runs against a CXXRTL
-> model and passes — see `examples/cocotb_counter/` (`TESTS=1 PASS=1 FAIL=0`).
-> The VPI surface (object access, callbacks/time/control, hierarchy discovery)
-> is implemented over `cxxrtl_capi` and covered by tests. See
-> `docs/vpi-coverage.md` for the coverage matrix. Early days — one flat-toplevel
-> example so far; expect rough edges on larger/hierarchical designs.
+> Status: **working.** Unmodified cocotb testbenches run against CXXRTL models
+> and pass. Measured against cocotb 2.0's own core regression suite, the
+> scheduler/timing/callback core is at **Verilator parity** (~91% of the runnable
+> core suite; the rest is the inherent CXXRTL-is-a-synthesizer boundary —
+> `real`/`string`, folded parameters), and **ahead** on force/release (which
+> cocotb does not support on Verilator). Implemented over `cxxrtl_capi`: object
+> access, callbacks/time/control, hierarchy + parent-nav, memories, wide signals,
+> net/reg classification, ranges, picosecond time, init-fuzzing, VCD tracing, and
+> an optional yosys-slang frontend for full SystemVerilog. See
+> `docs/vpi-coverage.md` for the coverage matrix and limits.
 
 ## Why this is an engine adapter, not a cocotb plugin
 
@@ -53,13 +57,27 @@ cxxrtl_vpi/           small Python helper: locate includes, build, run
 docs/                 design rationale + VPI coverage matrix
 ```
 
-## Building (once implemented)
+## Install
+
+Not on PyPI yet — install from source (the cocotb path requires Python ≤ 3.13):
+
+```sh
+pip install git+https://github.com/lanserge/cxxrtl-vpi
+```
+
+Requires **Yosys** (`yosys` / `yosys-config`) and a **C++14 compiler** on `PATH`.
+The quickest way to see it work is the cocotb example:
+
+```sh
+PYTHON=/path/to/venv/bin/python bash examples/cocotb_counter/run_cocotb.sh
+# -> test_count_up passed ... TESTS=1 PASS=1 FAIL=0
+```
+
+The provider library alone also builds standalone with CMake:
 
 ```sh
 cmake -S . -B build && cmake --build build
 ```
-
-Requires Yosys (for `yosys` / `yosys-config`) and a C++14 compiler.
 
 ## License
 
